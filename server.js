@@ -79,7 +79,7 @@ const authLimiter = rateLimit({
 // ──────────────────────────────────────────────────────────────
 //  DATABASE CONNECTION
 // ──────────────────────────────────────────────────────────────
-mongoose.connect(process.env.MONGODB_URL || process.env.MONGO_URI,{
+mongoose.connect(process.env.MONGODB_URL || process.env.MONGO_URL,{
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
