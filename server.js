@@ -85,7 +85,6 @@ mongoose.connect(process.env.MONGO_PUBLIC_URL) || process.env.MONGO_URL,{
 })
 .then(() => console.log("✅ MongoDB connected"))
 .catch(err => { console.error("❌ MongoDB error:", err); process.exit(1); });
-
 // ──────────────────────────────────────────────────────────────
 //  MONGOOSE SCHEMAS
 // ──────────────────────────────────────────────────────────────
