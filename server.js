@@ -79,10 +79,8 @@ const authLimiter = rateLimit({
 // ──────────────────────────────────────────────────────────────
 //  DATABASE CONNECTION
 // ──────────────────────────────────────────────────────────────
-mongoose.connect(process.env.MONGO_PUBLIC_URL) || process.env.MONGO_URL,{
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
+const mongoURI = process.env.MONGO_PUBLIC_URL || process.env.MONGO_URL;
+mongoose.connect(mongoURI)
 .then(() => console.log("✅ MongoDB connected"))
 .catch(err => { console.error("❌ MongoDB error:", err); process.exit(1); });
 // ──────────────────────────────────────────────────────────────
