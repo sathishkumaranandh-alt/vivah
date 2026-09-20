@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Environment variables (KEEP SECRET!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# Build output
+dist/
+build/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Render
+.render/
+
+# Supabase
+.supabase/
