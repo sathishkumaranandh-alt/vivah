@@ -3,6 +3,7 @@ import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import profileRoutes from "./routes/profile.js";
 import messageRoutes from "./routes/messages.js";
+import subscriptionRoutes from "./routes/subscriptions.js";
 import reportRoutes from "./routes/reports.js";
 
 const app = express();
@@ -19,7 +20,13 @@ app.get("/", (req, res) => {
     status: "ok",
     message: "Vivaha Matrimony Backend is running 🚀",
     timestamp: new Date().toISOString(),
-    routes: ["/auth", "/profile", "/messages", "/subscriptions"],
+    routes: [
+      "/auth",
+      "/profile",
+      "/messages",
+      "/subscriptions",
+      "/reports",
+    ],
   });
 });
 
@@ -33,6 +40,7 @@ app.get("/health", (req, res) => {
 app.use("/auth", authRoutes);
 app.use("/profile", profileRoutes);
 app.use("/messages", messageRoutes);
+app.use("/subscriptions", subscriptionRoutes);
 app.use("/reports", reportRoutes);
 
 // ============================================================
