@@ -5,28 +5,20 @@ import profileRoutes from "./routes/profile.js";
 import messageRoutes from "./routes/messages.js";
 import subscriptionRoutes from "./routes/subscriptions.js";
 import reportRoutes from "./routes/reports.js";
+import auditRoutes from "./routes/audit.js";
 
 const app = express();
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ============================================================
-// HEALTH CHECK ROUTES
-// ============================================================
+// Health check
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "Vivaha Matrimony Backend is running 🚀",
     timestamp: new Date().toISOString(),
-    routes: [
-      "/auth",
-      "/profile",
-      "/messages",
-      "/subscriptions",
-      "/reports",
-    ],
+    routes: ["/auth", "/profile", "/messages", "/subscriptions", "/reports", "/audit", "/settings"],
   });
 });
 
@@ -34,28 +26,19 @@ app.get("/health", (req, res) => {
   res.json({ status: "healthy", uptime: process.uptime() });
 });
 
-// ============================================================
-// API ROUTES
-// ============================================================
+// API routes
 app.use("/auth", authRoutes);
 app.use("/profile", profileRoutes);
 app.use("/messages", messageRoutes);
 app.use("/subscriptions", subscriptionRoutes);
 app.use("/reports", reportRoutes);
+app.use("/audit", auditRoutes);
+app.use("/", auditRoutes); // also mounts /settings at root level
 
-// ============================================================
-// 404 HANDLER (for unknown routes)
-// ============================================================
+// 404 handler
 app.use((req, res) => {
-  res.status(404).json({
-    error: "Route not found",
-    path: req.originalUrl,
-    method: req.method,
-  });
+  res.status(404).json({ error: "Route not found", path: req.originalUrl, method: req.method });
 });
 
-// ============================================================
-// START SERVER
-// ============================================================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
