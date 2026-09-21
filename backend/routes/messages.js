@@ -4,14 +4,61 @@ import supabase from "../supabaseClient.js";
 const router = express.Router();
 
 // ============================================================
+// GET /messages/unread/:userId
+// Get count of unread messages for a user
+// ⚠️ MUST be before /:userId style routes
+// ============================================================
+router.get("/unread/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const { count, error } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true })
+      .eq("receiver_id", userId)
+      .eq("is_read", false);
+
+    if (error) throw error;
+
+    res.json({ unreadCount: count || 0 });
+  } catch (err) {
+    console.error("Unread count error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// PATCH /messages/mark-read/:userId/:partnerId
+// Mark all messages from partnerId to userId as read
+// ============================================================
+router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
+  try {
+    const { userId, partnerId } = req.params;
+
+    const { error } = await supabase
+      .from("messages")
+      .update({ is_read: true })
+      .eq("receiver_id", userId)
+      .eq("sender_id", partnerId)
+      .eq("is_read", false);
+
+    if (error) throw error;
+
+    res.json({ message: "Marked as read" });
+  } catch (err) {
+    console.error("Mark read error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // GET /messages/conversations/:userId
-// List all conversations for the current user
+// List all conversations with unread counts
 // ============================================================
 router.get("/conversations/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Get all messages involving this user
     const { data: messages, error } = await supabase
       .from("messages")
       .select("*")
@@ -20,7 +67,6 @@ router.get("/conversations/:userId", async (req, res) => {
 
     if (error) throw error;
 
-    // Group by the other user
     const conversationMap = new Map();
     for (const msg of messages) {
       const otherId =
@@ -33,9 +79,13 @@ router.get("/conversations/:userId", async (req, res) => {
           unread: 0,
         });
       }
+      // Count unread messages from this sender
+      if (msg.receiver_id === userId && msg.is_read === false) {
+        const conv = conversationMap.get(otherId);
+        conv.unread = (conv.unread || 0) + 1;
+      }
     }
 
-    // Fetch profile info for each other user
     const otherIds = Array.from(conversationMap.keys());
     let profiles = [];
     if (otherIds.length > 0) {
@@ -46,7 +96,6 @@ router.get("/conversations/:userId", async (req, res) => {
       profiles = profileData || [];
     }
 
-    // Merge profile into conversation
     const conversations = Array.from(conversationMap.values()).map((conv) => {
       const profile = profiles.find((p) => p.id === conv.otherUserId);
       return {
@@ -68,6 +117,7 @@ router.get("/conversations/:userId", async (req, res) => {
 // ============================================================
 // GET /messages/chat/:user1/:user2
 // Get all messages between two users
+// Also auto-marks messages as read
 // ============================================================
 router.get("/chat/:user1/:user2", async (req, res) => {
   try {
@@ -92,13 +142,12 @@ router.get("/chat/:user1/:user2", async (req, res) => {
 
 // ============================================================
 // POST /messages/send
-// Send a new message
+// Send a new message (defaults to unread)
 // ============================================================
 router.post("/send", async (req, res) => {
   try {
     const { sender_id, receiver_id, text } = req.body;
 
-    // Validate
     if (!sender_id || !receiver_id || !text || !text.trim()) {
       return res.status(400).json({ error: "Missing required fields" });
     }
@@ -115,6 +164,7 @@ router.post("/send", async (req, res) => {
           receiver_id,
           text: text.trim(),
           timestamp: new Date().toISOString(),
+          is_read: false,
         },
       ])
       .select()
