@@ -4,14 +4,31 @@ import supabase from "../supabaseClient.js";
 const router = express.Router();
 
 // ============================================================
+// HELPER: Check if two users are connected (accepted interest)
+// ============================================================
+async function areConnected(user1, user2) {
+  const { data, error } = await supabase
+    .from("interests")
+    .select("id, status")
+    .or(
+      `and(sender_id.eq.${user1},receiver_id.eq.${user2}),and(sender_id.eq.${user2},receiver_id.eq.${user1})`
+    )
+    .eq("status", "accepted")
+    .maybeSingle();
+
+  if (error) {
+    console.error("areConnected check error:", error);
+    return false;
+  }
+  return !!data;
+}
+
+// ============================================================
 // GET /messages/unread/:userId
-// Get count of unread messages for a user
-// ⚠️ MUST be before /:userId style routes
 // ============================================================
 router.get("/unread/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-
     const { count, error } = await supabase
       .from("messages")
       .select("*", { count: "exact", head: true })
@@ -19,7 +36,6 @@ router.get("/unread/:userId", async (req, res) => {
       .eq("is_read", false);
 
     if (error) throw error;
-
     res.json({ unreadCount: count || 0 });
   } catch (err) {
     console.error("Unread count error:", err);
@@ -29,12 +45,10 @@ router.get("/unread/:userId", async (req, res) => {
 
 // ============================================================
 // PATCH /messages/mark-read/:userId/:partnerId
-// Mark all messages from partnerId to userId as read
 // ============================================================
 router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
   try {
     const { userId, partnerId } = req.params;
-
     const { error } = await supabase
       .from("messages")
       .update({ is_read: true })
@@ -43,7 +57,6 @@ router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
       .eq("is_read", false);
 
     if (error) throw error;
-
     res.json({ message: "Marked as read" });
   } catch (err) {
     console.error("Mark read error:", err);
@@ -53,12 +66,25 @@ router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
 
 // ============================================================
 // GET /messages/conversations/:userId
-// List all conversations with unread counts
+// ⭐ NOW ONLY RETURNS ACCEPTED CONNECTIONS
 // ============================================================
 router.get("/conversations/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
+    // Get all ACCEPTED connections for this user
+    const { data: connections } = await supabase
+      .from("interests")
+      .select("sender_id, receiver_id")
+      .eq("status", "accepted")
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+
+    const connectedIds = new Set();
+    (connections || []).forEach((c) => {
+      connectedIds.add(c.sender_id === userId ? c.receiver_id : c.sender_id);
+    });
+
+    // Get all messages
     const { data: messages, error } = await supabase
       .from("messages")
       .select("*")
@@ -67,10 +93,14 @@ router.get("/conversations/:userId", async (req, res) => {
 
     if (error) throw error;
 
+    // Group by other user — but ONLY include connected users
     const conversationMap = new Map();
     for (const msg of messages) {
-      const otherId =
-        msg.sender_id === userId ? msg.receiver_id : msg.sender_id;
+      const otherId = msg.sender_id === userId ? msg.receiver_id : msg.sender_id;
+
+      // Skip if not connected
+      if (!connectedIds.has(otherId)) continue;
+
       if (!conversationMap.has(otherId)) {
         conversationMap.set(otherId, {
           otherUserId: otherId,
@@ -79,13 +109,25 @@ router.get("/conversations/:userId", async (req, res) => {
           unread: 0,
         });
       }
-      // Count unread messages from this sender
       if (msg.receiver_id === userId && msg.is_read === false) {
         const conv = conversationMap.get(otherId);
         conv.unread = (conv.unread || 0) + 1;
       }
     }
 
+    // Also include connected users with NO messages yet (fresh connections)
+    connectedIds.forEach((otherId) => {
+      if (!conversationMap.has(otherId)) {
+        conversationMap.set(otherId, {
+          otherUserId: otherId,
+          lastMessage: "Say hi to start the conversation!",
+          timestamp: null,
+          unread: 0,
+        });
+      }
+    });
+
+    // Fetch profiles
     const otherIds = Array.from(conversationMap.keys());
     let profiles = [];
     if (otherIds.length > 0) {
@@ -116,8 +158,6 @@ router.get("/conversations/:userId", async (req, res) => {
 
 // ============================================================
 // GET /messages/chat/:user1/:user2
-// Get all messages between two users
-// Also auto-marks messages as read
 // ============================================================
 router.get("/chat/:user1/:user2", async (req, res) => {
   try {
@@ -132,7 +172,6 @@ router.get("/chat/:user1/:user2", async (req, res) => {
       .order("timestamp", { ascending: true });
 
     if (error) throw error;
-
     res.json({ messages: data || [] });
   } catch (err) {
     console.error("Chat fetch error:", err);
@@ -142,7 +181,7 @@ router.get("/chat/:user1/:user2", async (req, res) => {
 
 // ============================================================
 // POST /messages/send
-// Send a new message (defaults to unread)
+// ⭐ NEW: Enforces that both users must be connected
 // ============================================================
 router.post("/send", async (req, res) => {
   try {
@@ -154,6 +193,16 @@ router.post("/send", async (req, res) => {
 
     if (sender_id === receiver_id) {
       return res.status(400).json({ error: "Cannot message yourself" });
+    }
+
+    // ⭐ CONNECTION CHECK — this is the important part
+    const connected = await areConnected(sender_id, receiver_id);
+    if (!connected) {
+      return res.status(403).json({
+        error:
+          "You can only message users you are connected with. Send an interest first and wait for them to accept.",
+        code: "NOT_CONNECTED",
+      });
     }
 
     const { data, error } = await supabase
@@ -171,7 +220,6 @@ router.post("/send", async (req, res) => {
       .single();
 
     if (error) throw error;
-
     res.status(201).json({ message: "Message sent", data });
   } catch (err) {
     console.error("Send message error:", err);
