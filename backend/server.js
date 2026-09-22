@@ -6,6 +6,7 @@ import messageRoutes from "./routes/messages.js";
 import subscriptionRoutes from "./routes/subscriptions.js";
 import reportRoutes from "./routes/reports.js";
 import auditRoutes from "./routes/audit.js";
+import interestRoutes from "./routes/interests.js";
 
 const app = express();
 
@@ -18,7 +19,7 @@ app.get("/", (req, res) => {
     status: "ok",
     message: "Vivaha Matrimony Backend is running 🚀",
     timestamp: new Date().toISOString(),
-    routes: ["/auth", "/profile", "/messages", "/subscriptions", "/reports", "/audit", "/settings"],
+    routes: ["/auth", "/profile", "/messages", "/subscriptions", "/reports", "/audit", "/interests", "/settings"],
   });
 });
 
@@ -33,7 +34,8 @@ app.use("/messages", messageRoutes);
 app.use("/subscriptions", subscriptionRoutes);
 app.use("/reports", reportRoutes);
 app.use("/audit", auditRoutes);
-app.use("/", auditRoutes); // also mounts /settings at root level
+app.use("/interests", interestRoutes);
+app.use("/", auditRoutes);
 
 // 404 handler
 app.use((req, res) => {
