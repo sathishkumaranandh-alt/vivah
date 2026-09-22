@@ -7,27 +7,20 @@ import subscriptionRoutes from "./routes/subscriptions.js";
 import reportRoutes from "./routes/reports.js";
 import auditRoutes from "./routes/audit.js";
 import interestRoutes from "./routes/interests.js";
+import notificationRoutes from "./routes/notifications.js";
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-// Health check
 app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Vivaha Matrimony Backend is running 🚀",
-    timestamp: new Date().toISOString(),
-    routes: ["/auth", "/profile", "/messages", "/subscriptions", "/reports", "/audit", "/interests", "/settings"],
-  });
+  res.json({ status: "ok", message: "Vivaha Matrimony Backend is running 🚀" });
 });
 
 app.get("/health", (req, res) => {
   res.json({ status: "healthy", uptime: process.uptime() });
 });
 
-// API routes
 app.use("/auth", authRoutes);
 app.use("/profile", profileRoutes);
 app.use("/messages", messageRoutes);
@@ -35,9 +28,9 @@ app.use("/subscriptions", subscriptionRoutes);
 app.use("/reports", reportRoutes);
 app.use("/audit", auditRoutes);
 app.use("/interests", interestRoutes);
+app.use("/notifications", notificationRoutes);
 app.use("/", auditRoutes);
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: "Route not found", path: req.originalUrl, method: req.method });
 });
