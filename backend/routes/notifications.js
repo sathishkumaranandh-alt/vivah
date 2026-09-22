@@ -125,5 +125,24 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ============================================================
+// PATCH /notifications/read-by-actor/:userId/:actorId
+// Mark ALL notifications from a specific actor as read
+// ============================================================
+router.patch("/read-by-actor/:userId/:actorId", async (req, res) => {
+  try {
+    const { userId, actorId } = req.params;
+    const { error } = await supabase
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("user_id", userId)
+      .eq("actor_id", actorId)
+      .eq("is_read", false);
 
+    if (error) throw error;
+    res.json({ message: "Marked all from actor as read" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 export default router;
