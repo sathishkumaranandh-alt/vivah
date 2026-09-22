@@ -5,33 +5,23 @@ const router = express.Router();
 
 // ============================================================
 // PATCH /interests/respond/:interestId
-// Accept or decline an interest
 // ============================================================
 router.patch("/respond/:interestId", async (req, res) => {
   try {
     const { interestId } = req.params;
     const { status, reason } = req.body;
 
-    console.log("=== RESPOND REQUEST ===");
-    console.log("Interest ID:", interestId);
-    console.log("Status:", status);
-    console.log("Reason:", reason);
-
     if (!["accepted", "declined"].includes(status)) {
-      console.log("Invalid status");
-      return res.status(400).json({ error: "Invalid status: " + status });
+      return res.status(400).json({ error: "Invalid status" });
     }
 
     const updateData = {
       status,
       responded_at: new Date().toISOString(),
     };
-
     if (status === "declined" && reason) {
       updateData.message = `Declined: ${reason}`;
     }
-
-    console.log("Updating with:", updateData);
 
     const { data, error } = await supabase
       .from("interests")
@@ -40,23 +30,30 @@ router.patch("/respond/:interestId", async (req, res) => {
       .select()
       .single();
 
-    if (error) {
-      console.error("Supabase UPDATE error:", error);
-      return res.status(500).json({
-        error: error.message,
-        code: error.code,
-        details: error.details,
-      });
+    if (error) throw error;
+
+    // ⭐ Notify original sender
+    try {
+      const { data: responder } = await supabase
+        .from("users").select("name").eq("id", data.receiver_id).single();
+
+      await supabase.from("notifications").insert([{
+        user_id: data.sender_id,
+        actor_id: data.receiver_id,
+        type: status === "accepted" ? "interest_accepted" : "interest_declined",
+        title: status === "accepted" ? "Interest Accepted! 💕" : "Interest Declined",
+        body: status === "accepted"
+          ? `${responder?.name || "Someone"} accepted your interest. You can now message them!`
+          : `${responder?.name || "Someone"} declined your interest.`,
+        link: status === "accepted" ? `/messages?to=${data.receiver_id}` : "/interests",
+      }]);
+    } catch (e) {
+      console.error("Notify error:", e);
     }
 
-    if (!data) {
-      return res.status(404).json({ error: "Interest not found" });
-    }
-
-    console.log("Update success:", data);
     res.json({ message: `Interest ${status}`, interest: data });
   } catch (err) {
-    console.error("Respond catch error:", err);
+    console.error("Respond error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -68,13 +65,9 @@ router.get("/received/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const { status } = req.query;
-
     let query = supabase
-      .from("interests")
-      .select("*")
-      .eq("receiver_id", userId)
+      .from("interests").select("*").eq("receiver_id", userId)
       .order("created_at", { ascending: false });
-
     if (status) query = query.eq("status", status);
 
     const { data, error } = await query;
@@ -90,14 +83,9 @@ router.get("/received/:userId", async (req, res) => {
       (users || []).forEach((u) => { userMap[u.id] = u; });
     }
 
-    const enriched = (data || []).map((i) => ({
-      ...i,
-      sender: userMap[i.sender_id] || null,
-    }));
-
+    const enriched = (data || []).map((i) => ({ ...i, sender: userMap[i.sender_id] || null }));
     res.json({ interests: enriched, total: enriched.length });
   } catch (err) {
-    console.error("Received interests error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -109,13 +97,9 @@ router.get("/sent/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const { status } = req.query;
-
     let query = supabase
-      .from("interests")
-      .select("*")
-      .eq("sender_id", userId)
+      .from("interests").select("*").eq("sender_id", userId)
       .order("created_at", { ascending: false });
-
     if (status) query = query.eq("status", status);
 
     const { data, error } = await query;
@@ -131,14 +115,9 @@ router.get("/sent/:userId", async (req, res) => {
       (users || []).forEach((u) => { userMap[u.id] = u; });
     }
 
-    const enriched = (data || []).map((i) => ({
-      ...i,
-      receiver: userMap[i.receiver_id] || null,
-    }));
-
+    const enriched = (data || []).map((i) => ({ ...i, receiver: userMap[i.receiver_id] || null }));
     res.json({ interests: enriched, total: enriched.length });
   } catch (err) {
-    console.error("Sent interests error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -150,11 +129,8 @@ router.get("/count/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const { count, error } = await supabase
-      .from("interests")
-      .select("*", { count: "exact", head: true })
-      .eq("receiver_id", userId)
-      .eq("status", "pending");
-
+      .from("interests").select("*", { count: "exact", head: true })
+      .eq("receiver_id", userId).eq("status", "pending");
     if (error) throw error;
     res.json({ pendingCount: count || 0 });
   } catch (err) {
@@ -169,13 +145,9 @@ router.get("/status/:userId/:otherId", async (req, res) => {
   try {
     const { userId, otherId } = req.params;
     const { data, error } = await supabase
-      .from("interests")
-      .select("*")
-      .or(
-        `and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`
-      )
+      .from("interests").select("*")
+      .or(`and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`)
       .maybeSingle();
-
     if (error) throw error;
     if (!data) return res.json({ status: "none", direction: null });
     const direction = data.sender_id === userId ? "sent" : "received";
@@ -191,21 +163,16 @@ router.get("/status/:userId/:otherId", async (req, res) => {
 router.post("/send", async (req, res) => {
   try {
     const { sender_id, receiver_id, message } = req.body;
-
     if (!sender_id || !receiver_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-
     if (sender_id === receiver_id) {
       return res.status(400).json({ error: "Cannot send interest to yourself" });
     }
 
     const { data: existing } = await supabase
-      .from("interests")
-      .select("*")
-      .or(
-        `and(sender_id.eq.${sender_id},receiver_id.eq.${receiver_id}),and(sender_id.eq.${receiver_id},receiver_id.eq.${sender_id})`
-      )
+      .from("interests").select("*")
+      .or(`and(sender_id.eq.${sender_id},receiver_id.eq.${receiver_id}),and(sender_id.eq.${receiver_id},receiver_id.eq.${sender_id})`)
       .maybeSingle();
 
     if (existing) {
@@ -218,15 +185,8 @@ router.post("/send", async (req, res) => {
       if (existing.status === "declined" && existing.sender_id === sender_id) {
         const { data, error } = await supabase
           .from("interests")
-          .update({
-            status: "pending",
-            created_at: new Date().toISOString(),
-            responded_at: null,
-            message: message || null,
-          })
-          .eq("id", existing.id)
-          .select()
-          .single();
+          .update({ status: "pending", created_at: new Date().toISOString(), responded_at: null, message: message || null })
+          .eq("id", existing.id).select().single();
         if (error) throw error;
         return res.json({ message: "Interest re-sent", interest: data });
       }
@@ -236,13 +196,29 @@ router.post("/send", async (req, res) => {
     const { data, error } = await supabase
       .from("interests")
       .insert([{ sender_id, receiver_id, status: "pending", message: message || null }])
-      .select()
-      .single();
+      .select().single();
 
     if (error) throw error;
+
+    // ⭐ Notify receiver
+    try {
+      const { data: sender } = await supabase
+        .from("users").select("name").eq("id", sender_id).single();
+
+      await supabase.from("notifications").insert([{
+        user_id: receiver_id,
+        actor_id: sender_id,
+        type: "interest_received",
+        title: "New Interest 💌",
+        body: `${sender?.name || "Someone"} sent you an interest`,
+        link: "/interests",
+      }]);
+    } catch (e) {
+      console.error("Notify error:", e);
+    }
+
     res.status(201).json({ message: "Interest sent!", interest: data });
   } catch (err) {
-    console.error("Send interest error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -256,22 +232,16 @@ router.post("/shortlist", async (req, res) => {
     if (!user_id || !shortlisted_user_id) {
       return res.status(400).json({ error: "Missing fields" });
     }
-
     const { data: existing } = await supabase
-      .from("shortlists")
-      .select("*")
-      .eq("user_id", user_id)
-      .eq("shortlisted_user_id", shortlisted_user_id)
+      .from("shortlists").select("*")
+      .eq("user_id", user_id).eq("shortlisted_user_id", shortlisted_user_id)
       .maybeSingle();
-
     if (existing) {
       await supabase.from("shortlists").delete().eq("id", existing.id);
       return res.json({ action: "removed" });
     }
-
     const { error } = await supabase
-      .from("shortlists")
-      .insert([{ user_id, shortlisted_user_id }]);
+      .from("shortlists").insert([{ user_id, shortlisted_user_id }]);
     if (error) throw error;
     res.json({ action: "added" });
   } catch (err) {
@@ -286,11 +256,8 @@ router.get("/shortlisted/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const { data, error } = await supabase
-      .from("shortlists")
-      .select("*")
-      .eq("user_id", userId)
+      .from("shortlists").select("*").eq("user_id", userId)
       .order("created_at", { ascending: false });
-
     if (error) throw error;
 
     const ids = (data || []).map((s) => s.shortlisted_user_id);
@@ -303,11 +270,7 @@ router.get("/shortlisted/:userId", async (req, res) => {
       (users || []).forEach((u) => { userMap[u.id] = u; });
     }
 
-    const enriched = (data || []).map((s) => ({
-      ...s,
-      user: userMap[s.shortlisted_user_id] || null,
-    }));
-
+    const enriched = (data || []).map((s) => ({ ...s, user: userMap[s.shortlisted_user_id] || null }));
     res.json({ shortlisted: enriched, total: enriched.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
