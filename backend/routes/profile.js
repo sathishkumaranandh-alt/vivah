@@ -4,117 +4,75 @@ import supabase from "../supabaseClient.js";
 const router = express.Router();
 
 // ============================================================
-// HELPER: Calculate age difference score (max 20 points)
+// HELPERS — Matching Algorithm
 // ============================================================
 function ageScore(age1, age2, gender1, gender2) {
   if (!age1 || !age2) return 0;
-
   let older, younger;
-  if (gender1 === "male") {
-    older = age1;
-    younger = age2;
-  } else {
-    older = age2;
-    younger = age1;
-  }
-
+  if (gender1 === "male") { older = age1; younger = age2; }
+  else { older = age2; younger = age1; }
   const diff = older - younger;
-
   if (diff >= 2 && diff <= 8) return 20;
   if (diff >= 0 && diff <= 10) return 15;
   if (diff >= -3 && diff <= 15) return 8;
   return 0;
 }
 
-// ============================================================
-// HELPER: Calculate location score (max 15 points)
-// ============================================================
 function locationScore(loc1, loc2) {
   if (!loc1 || !loc2) return 0;
   const l1 = loc1.toLowerCase().trim();
   const l2 = loc2.toLowerCase().trim();
-
   if (l1 === l2) return 15;
   if (l1.split(",")[0] === l2.split(",")[0]) return 10;
   return 3;
 }
 
-// ============================================================
-// HELPER: Calculate profile completeness (max 10 points)
-// ============================================================
 function completenessScore(profile) {
-  const fields = [
-    "name",
-    "age",
-    "gender",
-    "religion",
-    "location",
-    "education",
-    "occupation",
-    "bio",
-    "photo_url",
-  ];
-  const filled = fields.filter(
-    (f) => profile[f] && String(profile[f]).trim() !== ""
-  ).length;
+  const fields = ["name", "age", "gender", "religion", "location", "education", "occupation", "bio", "photo_url"];
+  const filled = fields.filter(f => profile[f] && String(profile[f]).trim() !== "").length;
   return Math.round((filled / fields.length) * 10);
 }
 
-// ============================================================
-// HELPER: The full matching score (max 100 points)
-// ============================================================
 function calculateMatchScore(userA, userB) {
   let score = 0;
   const reasons = [];
 
-  // 1. Gender match (30 points) — must be opposite
   if (userA.gender && userB.gender && userA.gender !== userB.gender) {
-    score += 30;
-    reasons.push("Opposite gender");
+    score += 30; reasons.push("Opposite gender");
   } else {
     return { score: 0, reasons: ["Gender mismatch"] };
   }
 
-  // 2. Religion match (25 points)
   if (userA.religion && userB.religion) {
     if (userA.religion.toLowerCase() === userB.religion.toLowerCase()) {
-      score += 25;
-      reasons.push("Same religion");
-    } else {
-      score += 5;
-      reasons.push("Different religion");
-    }
+      score += 25; reasons.push("Same religion");
+    } else { score += 5; reasons.push("Different religion"); }
   }
 
-  // 3. Age compatibility (20 points)
   const agePts = ageScore(userA.age, userB.age, userA.gender, userB.gender);
   score += agePts;
   if (agePts >= 15) reasons.push("Good age match");
 
-  // 4. Location match (15 points)
   const locPts = locationScore(userA.location, userB.location);
   score += locPts;
   if (locPts >= 10) reasons.push("Nearby location");
 
-  // 5. Profile completeness (10 points)
-  const completePts = Math.round(
-    (completenessScore(userA) + completenessScore(userB)) / 2
-  );
+  const completePts = Math.round((completenessScore(userA) + completenessScore(userB)) / 2);
   score += completePts;
 
   return { score, reasons };
 }
 
 // ============================================================
-// GET /profile/search — Filter-based search
-// ⚠️ MUST be BEFORE /:userId route
+// GET /profile/search
+// Now accepts ?community=vanniyar
 // ============================================================
 router.get("/search", async (req, res) => {
   try {
-    const { age_min, age_max, religion, location, gender } = req.query;
-
+    const { age_min, age_max, religion, location, gender, community } = req.query;
     let query = supabase.from("users").select("*");
 
+    if (community) query = query.eq("community", community);
     if (age_min) query = query.gte("age", parseInt(age_min));
     if (age_max) query = query.lte("age", parseInt(age_max));
     if (religion) query = query.ilike("religion", `%${religion}%`);
@@ -122,7 +80,6 @@ router.get("/search", async (req, res) => {
     if (gender) query = query.eq("gender", gender);
 
     const { data, error } = await query.limit(50);
-
     if (error) return res.status(400).json({ error: error.message });
     res.json({ results: data, count: data.length });
   } catch (err) {
@@ -132,7 +89,8 @@ router.get("/search", async (req, res) => {
 });
 
 // ============================================================
-// GET /profile/matches/:userId — ⭐ MATCHING ALGORITHM
+// GET /profile/matches/:userId
+// Filters matches to SAME community only
 // ============================================================
 router.get("/matches/:userId", async (req, res) => {
   try {
@@ -144,31 +102,27 @@ router.get("/matches/:userId", async (req, res) => {
       .eq("id", userId)
       .single();
 
-    if (meError || !me) {
-      return res.status(404).json({ error: "Your profile not found" });
+    if (meError || !me) return res.status(404).json({ error: "Your profile not found" });
+
+    // ⭐ Filter by SAME community
+    let query = supabase.from("users").select("*").neq("id", userId).limit(200);
+    if (me.community) {
+      query = query.eq("community", me.community);
     }
 
-    const { data: allUsers, error: usersError } = await supabase
-      .from("users")
-      .select("*")
-      .neq("id", userId)
-      .limit(200);
-
+    const { data: allUsers, error: usersError } = await query;
     if (usersError) return res.status(500).json({ error: usersError.message });
 
     const scored = allUsers
-      .map((user) => {
+      .map(user => {
         const { score, reasons } = calculateMatchScore(me, user);
         return { ...user, matchScore: score, matchReasons: reasons };
       })
-      .filter((u) => u.matchScore > 0)
+      .filter(u => u.matchScore > 0)
       .sort((a, b) => b.matchScore - a.matchScore)
       .slice(0, 20);
 
-    res.json({
-      totalMatches: scored.length,
-      matches: scored,
-    });
+    res.json({ totalMatches: scored.length, matches: scored });
   } catch (err) {
     console.error("Matches error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -177,61 +131,39 @@ router.get("/matches/:userId", async (req, res) => {
 
 // ============================================================
 // ADMIN: GET /profile/admin/stats
-// Get dashboard statistics
 // ============================================================
 router.get("/admin/stats", async (req, res) => {
   try {
-    // Total users
-    const { count: totalUsers } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true });
+    const { data: allUsers } = await supabase.from("users").select("gender, community, is_verified, is_suspended");
 
-    // Male users
-    const { count: maleCount } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true })
-      .eq("gender", "male");
+    const users = allUsers || [];
+    const totalUsers = users.length;
+    const maleUsers = users.filter(u => u.gender === "male").length;
+    const femaleUsers = users.filter(u => u.gender === "female").length;
+    const verifiedUsers = users.filter(u => u.is_verified).length;
+    const suspendedUsers = users.filter(u => u.is_suspended).length;
 
-    // Female users
-    const { count: femaleCount } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true })
-      .eq("gender", "female");
+    // Community breakdown
+    const communityCounts = {};
+    users.forEach(u => {
+      if (u.community) communityCounts[u.community] = (communityCounts[u.community] || 0) + 1;
+    });
 
-    // Total messages
     const { count: totalMessages } = await supabase
-      .from("messages")
-      .select("*", { count: "exact", head: true });
+      .from("messages").select("*", { count: "exact", head: true });
 
-    // Recent signups (last 7 days)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
     const { count: recentSignups } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true })
+      .from("users").select("*", { count: "exact", head: true })
       .gte("created_at", sevenDaysAgo.toISOString());
 
-    // NEW: Verified users count
-    const { count: verifiedCount } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true })
-      .eq("is_verified", true);
-
-    // NEW: Suspended users count
-    const { count: suspendedCount } = await supabase
-      .from("users")
-      .select("*", { count: "exact", head: true })
-      .eq("is_suspended", true);
-
     res.json({
-      totalUsers: totalUsers || 0,
-      maleUsers: maleCount || 0,
-      femaleUsers: femaleCount || 0,
+      totalUsers, maleUsers, femaleUsers,
       totalMessages: totalMessages || 0,
       recentSignups: recentSignups || 0,
-      verifiedUsers: verifiedCount || 0,
-      suspendedUsers: suspendedCount || 0,
+      verifiedUsers, suspendedUsers,
+      communityCounts,
     });
   } catch (err) {
     console.error("Admin stats error:", err);
@@ -241,21 +173,22 @@ router.get("/admin/stats", async (req, res) => {
 
 // ============================================================
 // ADMIN: GET /profile/admin/users
-// Get all users (paginated)
+// Optional ?community=vanniyar filter
 // ============================================================
 router.get("/admin/users", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const offset = parseInt(req.query.offset) || 0;
+    const { community } = req.query;
 
-    const { data, error, count } = await supabase
-      .from("users")
-      .select("*", { count: "exact" })
+    let query = supabase.from("users").select("*", { count: "exact" });
+    if (community) query = query.eq("community", community);
+
+    const { data, error, count } = await query
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (error) throw error;
-
     res.json({ users: data || [], total: count || 0 });
   } catch (err) {
     console.error("Admin users error:", err);
@@ -264,169 +197,77 @@ router.get("/admin/users", async (req, res) => {
 });
 
 // ============================================================
-// ADMIN: PATCH /profile/admin/users/:userId/verify
-// Toggle user verification
+// ADMIN: PATCH verify / suspend / unsuspend / role
 // ============================================================
 router.patch("/admin/users/:userId/verify", async (req, res) => {
   try {
     const { userId } = req.params;
     const { is_verified } = req.body;
-
-    const { data, error } = await supabase
-      .from("users")
-      .update({ is_verified })
-      .eq("id", userId)
-      .select()
-      .single();
-
+    const { data, error } = await supabase.from("users").update({ is_verified }).eq("id", userId).select().single();
     if (error) throw error;
-
-    res.json({
-      message: is_verified ? "User verified" : "Verification removed",
-      user: data,
-    });
-  } catch (err) {
-    console.error("Verify error:", err);
-    res.status(500).json({ error: err.message });
-  }
+    res.json({ message: is_verified ? "User verified" : "Verification removed", user: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================================
-// ADMIN: PATCH /profile/admin/users/:userId/suspend
-// Suspend a user
-// ============================================================
 router.patch("/admin/users/:userId/suspend", async (req, res) => {
   try {
     const { userId } = req.params;
     const { reason } = req.body;
-
-    const { data, error } = await supabase
-      .from("users")
-      .update({
-        is_suspended: true,
-        suspend_reason: reason || "Violation of terms",
-      })
-      .eq("id", userId)
-      .select()
-      .single();
-
+    const { data, error } = await supabase.from("users")
+      .update({ is_suspended: true, suspend_reason: reason || "Violation of terms" })
+      .eq("id", userId).select().single();
     if (error) throw error;
-
     res.json({ message: "User suspended", user: data });
-  } catch (err) {
-    console.error("Suspend error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================================
-// ADMIN: PATCH /profile/admin/users/:userId/unsuspend
-// Lift suspension
-// ============================================================
 router.patch("/admin/users/:userId/unsuspend", async (req, res) => {
   try {
     const { userId } = req.params;
-
-    const { data, error } = await supabase
-      .from("users")
+    const { data, error } = await supabase.from("users")
       .update({ is_suspended: false, suspend_reason: null })
-      .eq("id", userId)
-      .select()
-      .single();
-
+      .eq("id", userId).select().single();
     if (error) throw error;
-
     res.json({ message: "User unsuspended", user: data });
-  } catch (err) {
-    console.error("Unsuspend error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================================
-// ADMIN: PATCH /profile/admin/users/:userId/role
-// Change user role (user <-> admin)
-// ============================================================
 router.patch("/admin/users/:userId/role", async (req, res) => {
   try {
     const { userId } = req.params;
     const { role } = req.body;
-
-    if (!["user", "admin"].includes(role)) {
-      return res.status(400).json({ error: "Invalid role" });
-    }
-
-    const { data, error } = await supabase
-      .from("users")
-      .update({ role })
-      .eq("id", userId)
-      .select()
-      .single();
-
+    if (!["user", "admin"].includes(role)) return res.status(400).json({ error: "Invalid role" });
+    const { data, error } = await supabase.from("users").update({ role }).eq("id", userId).select().single();
     if (error) throw error;
-
     res.json({ message: `Role changed to ${role}`, user: data });
-  } catch (err) {
-    console.error("Role change error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================================
-// ADMIN: GET /profile/admin/users/:userId/details
-// Get full user details
-// ============================================================
 router.get("/admin/users/:userId/details", async (req, res) => {
   try {
     const { userId } = req.params;
-
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("id", userId)
-      .single();
-
+    const { data, error } = await supabase.from("users").select("*").eq("id", userId).single();
     if (error) throw error;
-
     res.json({ user: data });
-  } catch (err) {
-    console.error("User details error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================================
-// ADMIN: DELETE /profile/admin/users/:userId
-// Delete a user profile
-// ============================================================
 router.delete("/admin/users/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-
     const { error } = await supabase.from("users").delete().eq("id", userId);
-
     if (error) throw error;
-
     res.json({ message: "User deleted" });
-  } catch (err) {
-    console.error("Delete user error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============================================================
-// GET /profile/:userId — Get a single profile
-// ⚠️ MUST be AFTER /search, /matches, /admin/*
+// GET /profile/:userId  (single profile)
 // ============================================================
 router.get("/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("id", userId)
-      .single();
-
+    const { data, error } = await supabase.from("users").select("*").eq("id", userId).single();
     if (error) return res.status(404).json({ error: "Profile not found" });
     res.json({ profile: data });
   } catch (err) {
@@ -436,26 +277,18 @@ router.get("/:userId", async (req, res) => {
 });
 
 // ============================================================
-// PUT /profile/:userId — Update a profile
+// PUT /profile/:userId  (update profile, including community)
 // ============================================================
 router.put("/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const updates = req.body;
-
     delete updates.id;
     delete updates.email;
     delete updates.created_at;
-
     updates.updated_at = new Date().toISOString();
 
-    const { data, error } = await supabase
-      .from("users")
-      .update(updates)
-      .eq("id", userId)
-      .select()
-      .single();
-
+    const { data, error } = await supabase.from("users").update(updates).eq("id", userId).select().single();
     if (error) return res.status(400).json({ error: error.message });
     res.json({ message: "Profile updated", profile: data });
   } catch (err) {
