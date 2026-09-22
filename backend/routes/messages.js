@@ -14,6 +14,7 @@ async function areConnected(user1, user2) {
   return !!data;
 }
 
+
 // GET /messages/unread/:userId
 router.get("/unread/:userId", async (req, res) => {
   try {
@@ -27,7 +28,6 @@ router.get("/unread/:userId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // PATCH /messages/mark-read/:userId/:partnerId
 router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
   try {
