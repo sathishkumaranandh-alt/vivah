@@ -8,6 +8,7 @@ import reportRoutes from "./routes/reports.js";
 import auditRoutes from "./routes/audit.js";
 import interestRoutes from "./routes/interests.js";
 import notificationRoutes from "./routes/notifications.js";
+import photoRoutes from "./routes/photos.js";
 import communityRoutes from "./routes/communities.js";
 
 const app = express();
@@ -30,6 +31,7 @@ app.use("/reports", reportRoutes);
 app.use("/audit", auditRoutes);
 app.use("/interests", interestRoutes);
 app.use("/notifications", notificationRoutes);
+app.use("/photos", photoRoutes);
 app.use("/communities", communityRoutes);
 app.use("/", auditRoutes);
 
