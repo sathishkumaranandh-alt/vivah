@@ -5,7 +5,7 @@ const router = express.Router();
 
 // ============================================================
 // GET /communities
-// List all active communities (public — no auth needed)
+// Public — only active communities
 // ============================================================
 router.get("/", async (req, res) => {
   try {
@@ -25,7 +25,7 @@ router.get("/", async (req, res) => {
 
 // ============================================================
 // GET /communities/all
-// List ALL communities (admin — includes inactive)
+// Admin — includes inactive
 // ============================================================
 router.get("/all", async (req, res) => {
   try {
@@ -43,8 +43,113 @@ router.get("/all", async (req, res) => {
 });
 
 // ============================================================
+// POST /communities/bulk
+// Add multiple communities from a text list
+// Format: one per line, optional "emoji|Name" or just "Name"
+// ============================================================
+router.post("/bulk", async (req, res) => {
+  try {
+    const { list } = req.body;
+    if (!list || typeof list !== "string") {
+      return res.status(400).json({ error: "List text is required" });
+    }
+
+    const lines = list
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0) {
+      return res.status(400).json({ error: "No lines to import" });
+    }
+
+    const parsed = [];
+    for (const line of lines) {
+      let emoji = "👥";
+      let name = line;
+
+      // Support "emoji|Name" format
+      if (line.includes("|")) {
+        const parts = line.split("|").map((p) => p.trim());
+        if (parts.length === 2) {
+          emoji = parts[0] || "👥";
+          name = parts[1];
+        }
+      }
+
+      if (!name) continue;
+
+      const slug = name
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^a-z0-9_]/g, "");
+
+      if (!slug) continue;
+
+      parsed.push({
+        slug,
+        name,
+        emoji,
+        is_active: true,
+        display_order: 999,
+      });
+    }
+
+    if (parsed.length === 0) {
+      return res.status(400).json({ error: "No valid community names found" });
+    }
+
+    // Get existing slugs
+    const { data: existing } = await supabase
+      .from("communities")
+      .select("slug");
+    const existingSlugs = new Set((existing || []).map((c) => c.slug));
+
+    // Deduplicate within the input
+    const seen = new Set();
+    const toInsert = [];
+    let skipped = 0;
+
+    for (const c of parsed) {
+      if (existingSlugs.has(c.slug) || seen.has(c.slug)) {
+        skipped++;
+        continue;
+      }
+      seen.add(c.slug);
+      toInsert.push(c);
+    }
+
+    if (toInsert.length === 0) {
+      return res.json({
+        message: "All communities already exist",
+        added: 0,
+        skipped,
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("communities")
+      .insert(toInsert)
+      .select();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      message: `Added ${data.length} communities`,
+      added: data.length,
+      skipped,
+      communities: data,
+    });
+  } catch (err) {
+    console.error("Bulk import error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // POST /communities
-// Create a new community (admin)
+// Create one community
 // ============================================================
 router.post("/", async (req, res) => {
   try {
@@ -54,10 +159,8 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Slug and name are required" });
     }
 
-    // Normalize slug: lowercase, no spaces
     const cleanSlug = slug.toLowerCase().trim().replace(/\s+/g, "_");
 
-    // Check for existing
     const { data: existing } = await supabase
       .from("communities")
       .select("id")
@@ -70,14 +173,16 @@ router.post("/", async (req, res) => {
 
     const { data, error } = await supabase
       .from("communities")
-      .insert([{
-        slug: cleanSlug,
-        name: name.trim(),
-        emoji: emoji || "👥",
-        color: color || "#1e3a8a",
-        description: description || null,
-        display_order: display_order || 999,
-      }])
+      .insert([
+        {
+          slug: cleanSlug,
+          name: name.trim(),
+          emoji: emoji || "👥",
+          color: color || "#1e3a8a",
+          description: description || null,
+          display_order: display_order || 999,
+        },
+      ])
       .select()
       .single();
 
@@ -91,13 +196,11 @@ router.post("/", async (req, res) => {
 
 // ============================================================
 // PATCH /communities/:id
-// Update a community
 // ============================================================
 router.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-
     delete updates.id;
     delete updates.created_at;
 
@@ -125,12 +228,10 @@ router.patch("/:id", async (req, res) => {
 
 // ============================================================
 // PATCH /communities/:id/toggle
-// Toggle active status
 // ============================================================
 router.patch("/:id/toggle", async (req, res) => {
   try {
     const { id } = req.params;
-
     const { data: current, error: fetchError } = await supabase
       .from("communities").select("is_active").eq("id", id).single();
     if (fetchError) throw fetchError;
@@ -152,21 +253,16 @@ router.patch("/:id/toggle", async (req, res) => {
 
 // ============================================================
 // DELETE /communities/:id
-// Delete a community
 // ============================================================
 router.delete("/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get slug first
     const { data: community } = await supabase
       .from("communities").select("slug, name").eq("id", id).single();
 
-    if (!community) {
-      return res.status(404).json({ error: "Community not found" });
-    }
+    if (!community) return res.status(404).json({ error: "Community not found" });
 
-    // Safety: check if any users are assigned
     const { count: userCount } = await supabase
       .from("users")
       .select("*", { count: "exact", head: true })
