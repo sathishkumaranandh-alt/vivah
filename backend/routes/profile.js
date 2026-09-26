@@ -11,50 +11,7 @@ const supabaseAdmin = createClient(
 );
 
 // ============================================
-// 1. GET PROFILE (Fetches ALL columns now)
-// ============================================
-router.get('/:userId', async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .select('*') // <--- THIS IS THE FIX. Fetches all new columns.
-      .eq('id', userId)
-      .single();
-      
-    if (error) throw error;
-    res.json({ profile: data });
-  } catch (err) {
-    console.error("Profile fetch error:", err);
-    res.status(404).json({ error: "Profile not found" });
-  }
-});
-
-// ============================================
-// 2. UPDATE PROFILE
-// ============================================
-router.put('/:userId', async (req, res) => {
-  const { userId } = req.params;
-  const updates = req.body;
-  
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .update(updates)
-      .eq('id', userId)
-      .select()
-      .single();
-      
-    if (error) throw error;
-    res.json({ profile: data });
-  } catch (err) {
-    console.error("Profile update error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============================================
-// 3. SEARCH PROFILES
+// 1. SEARCH PROFILES (MUST BE FIRST!)
 // ============================================
 router.get('/search', async (req, res) => {
   try {
@@ -78,6 +35,49 @@ router.get('/search', async (req, res) => {
 });
 
 // ============================================
+// 2. GET SINGLE PROFILE (MUST BE AFTER SEARCH)
+// ============================================
+router.get('/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .select('*') 
+      .eq('id', userId)
+      .single();
+      
+    if (error) throw error;
+    res.json({ profile: data });
+  } catch (err) {
+    console.error("Profile fetch error:", err);
+    res.status(404).json({ error: "Profile not found" });
+  }
+});
+
+// ============================================
+// 3. UPDATE PROFILE
+// ============================================
+router.put('/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const updates = req.body;
+  
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .update(updates)
+      .eq('id', userId)
+      .select()
+      .single();
+      
+    if (error) throw error;
+    res.json({ profile: data });
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
 // 4. ADMIN STATS
 // ============================================
 router.get('/admin/stats', async (req, res) => {
@@ -91,7 +91,7 @@ router.get('/admin/stats', async (req, res) => {
       femaleUsers: users.filter(u => u.gender === 'female').length,
       verifiedUsers: users.filter(u => u.is_verified).length,
       suspendedUsers: users.filter(u => u.is_suspended).length,
-      totalMessages: 0, // You can fetch this separately if needed
+      totalMessages: 0,
     };
     res.json(stats);
   } catch (err) {
@@ -105,11 +105,7 @@ router.get('/admin/stats', async (req, res) => {
 router.get('/admin/users', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .select('*')
-      .limit(limit);
-      
+    const { data, error } = await supabaseAdmin.from('users').select('*').limit(limit);
     if (error) throw error;
     res.json({ users: data || [] });
   } catch (err) {
@@ -122,12 +118,7 @@ router.get('/admin/users', async (req, res) => {
 // ============================================
 router.get('/admin/users/:id/details', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-      
+    const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', req.params.id).single();
     if (error) throw error;
     res.json({ user: data });
   } catch (err) {
@@ -141,18 +132,10 @@ router.get('/admin/users/:id/details', async (req, res) => {
 router.patch('/admin/users/:id/verify', async (req, res) => {
   try {
     const { is_verified } = req.body;
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .update({ is_verified })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-      
+    const { data, error } = await supabaseAdmin.from('users').update({ is_verified }).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json({ user: data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============================================
@@ -161,18 +144,10 @@ router.patch('/admin/users/:id/verify', async (req, res) => {
 router.patch('/admin/users/:id/suspend', async (req, res) => {
   try {
     const { reason } = req.body;
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .update({ is_suspended: true, suspend_reason: reason })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-      
+    const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: true, suspend_reason: reason }).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json({ user: data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============================================
@@ -180,18 +155,10 @@ router.patch('/admin/users/:id/suspend', async (req, res) => {
 // ============================================
 router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .update({ is_suspended: false, suspend_reason: null })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-      
+    const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: false, suspend_reason: null }).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json({ user: data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============================================
@@ -200,18 +167,10 @@ router.patch('/admin/users/:id/unsuspend', async (req, res) => {
 router.patch('/admin/users/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .update({ role })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-      
+    const { data, error } = await supabaseAdmin.from('users').update({ role }).eq('id', req.params.id).select().single();
     if (error) throw error;
     res.json({ user: data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============================================
@@ -221,7 +180,6 @@ router.delete('/admin/users/:id', async (req, res) => {
   try {
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
     if (error) throw error;
-
     await supabaseAdmin.from('users').delete().eq('id', req.params.id);
     res.json({ success: true });
   } catch (err) {
