@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import adminRoutes from './routes/admin.js';
 import authRoutes from "./routes/auth.js";
 import profileRoutes from "./routes/profile.js";
 import messageRoutes from "./routes/messages.js";
@@ -24,6 +25,7 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/auth", authRoutes);
+app.use('/admin', adminRoutes);
 app.use("/profile", profileRoutes);
 app.use("/messages", messageRoutes);
 app.use("/subscriptions", subscriptionRoutes);
