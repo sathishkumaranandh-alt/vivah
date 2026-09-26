@@ -252,15 +252,71 @@ router.get("/admin/users/:userId/details", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================================
+// ADMIN: DELETE /profile/admin/users/:userId
+// Full cascade delete — removes user + all related data
+// ============================================================
 router.delete("/admin/users/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
-    const { error } = await supabase.from("users").delete().eq("id", userId);
-    if (error) throw error;
-    res.json({ message: "User deleted" });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+    const results = {};
 
+    // 1. Delete messages
+    const { error: msgErr } = await supabase
+      .from("messages").delete().or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+    results.messages = msgErr ? msgErr.message : "deleted";
+
+    // 2. Delete interests
+    const { error: intErr } = await supabase
+      .from("interests").delete().or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+    results.interests = intErr ? intErr.message : "deleted";
+
+    // 3. Delete shortlists
+    const { error: slErr } = await supabase
+      .from("shortlists").delete().or(`user_id.eq.${userId},shortlisted_user_id.eq.${userId}`);
+    results.shortlists = slErr ? slErr.message : "deleted";
+
+    // 4. Delete photos
+    const { error: phErr } = await supabase
+      .from("user_photos").delete().eq("user_id", userId);
+    results.photos = phErr ? phErr.message : "deleted";
+
+    // 5. Delete reports (as reporter or reported)
+    const { error: rpErr } = await supabase
+      .from("reports").delete().or(`reporter_id.eq.${userId},reported_user_id.eq.${userId}`);
+    results.reports = rpErr ? rpErr.message : "deleted";
+
+    // 6. Delete subscriptions
+    const { error: subErr } = await supabase
+      .from("subscriptions").delete().eq("user_id", userId);
+    results.subscriptions = subErr ? subErr.message : "deleted";
+
+    // 7. Delete notifications
+    const { error: ntfErr } = await supabase
+      .from("notifications").delete().or(`user_id.eq.${userId},actor_id.eq.${userId}`);
+    results.notifications = ntfErr ? ntfErr.message : "deleted";
+
+    // 8. Delete profile from users table
+    const { error: userErr } = await supabase
+      .from("users").delete().eq("id", userId);
+    if (userErr) throw userErr;
+
+    // 9. Delete Supabase auth user (prevents re-signup with same email)
+    const { error: authErr } = await supabase.auth.admin.deleteUser(userId);
+    if (authErr) {
+      console.warn("Auth delete failed (user may already be gone):", authErr.message);
+    }
+
+    console.log("Full user delete result:", results);
+    res.json({
+      message: "User and all related data permanently deleted",
+      details: results,
+    });
+  } catch (err) {
+    console.error("Full delete error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // ============================================================
 // GET /profile/:userId  (single profile)
 // ============================================================
