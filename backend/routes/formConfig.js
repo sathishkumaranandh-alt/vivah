@@ -69,6 +69,33 @@ router.delete('/fields/:id', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});// GET core field configurations
+router.get('/core-fields', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('core_fields_config').select('*');
+    if (error) throw error;
+    res.json({ fields: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE a core field configuration (Admin only)
+router.put('/core-fields/:key', async (req, res) => {
+  const { key } = req.params;
+  const { is_active, is_required } = req.body;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('core_fields_config')
+      .update({ is_active, is_required, updated_at: new Date().toISOString() })
+      .eq('field_key', key)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ field: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
