@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import adminRoutes from './routes/admin.js';
+import formConfigRoutes from './routes/formConfig.js';
 import authRoutes from "./routes/auth.js";
 import visitorsRoutes from './routes/visitors.js';
 import profileRoutes from "./routes/profile.js";
@@ -28,6 +29,7 @@ app.get("/health", (req, res) => {
 app.use("/auth", authRoutes);
 app.use('/visitors', visitorsRoutes);
 app.use('/admin', adminRoutes);
+app.use('/form-config', formConfigRoutes);
 app.use("/profile", profileRoutes);
 app.use("/messages", messageRoutes);
 app.use("/subscriptions", subscriptionRoutes);
