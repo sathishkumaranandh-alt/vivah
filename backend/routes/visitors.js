@@ -32,18 +32,30 @@ router.post('/log', async (req, res) => {
 router.get('/list/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
+    // 1. Get ALL views for this user (ordered newest first)
     const { data: views, error: viewError } = await supabaseAdmin
       .from('profile_views')
       .select('viewer_id, created_at')
       .eq('viewed_id', userId)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(100); // Fetch up to 100 recent views
 
     if (viewError) throw viewError;
     if (!views || views.length === 0) return res.json({ visitors: [] });
 
-    const viewerIds = [...new Set(views.map(v => v.viewer_id))];
+    // 2. DEDUPLICATE: Keep only the most recent view per unique viewer
+    const uniqueViews = [];
+    const seenViewers = new Set();
+    for (const view of views) {
+      if (!seenViewers.has(view.viewer_id)) {
+        seenViewers.add(view.viewer_id);
+        uniqueViews.push(view);
+      }
+    }
 
+    const viewerIds = [...seenViewers];
+
+    // 3. Fetch profile details for these unique viewers
     const { data: users, error: userError } = await supabaseAdmin
       .from('users')
       .select('id, name, age, location, photo_url, community, is_verified')
@@ -51,7 +63,8 @@ router.get('/list/:userId', async (req, res) => {
 
     if (userError) throw userError;
 
-    const visitors = views.map(view => {
+    // 4. Merge the unique view time with the user profile
+    const visitors = uniqueViews.map(view => {
       const user = users.find(u => u.id === view.viewer_id);
       return { ...user, viewed_at: view.created_at };
     }).filter(v => v.id);
