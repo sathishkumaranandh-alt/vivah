@@ -10,7 +10,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// 1. LOG A PROFILE VIEW
+// LOG A PROFILE VIEW
 router.post('/log', async (req, res) => {
   const { viewerId, viewedId } = req.body;
   if (!viewerId || !viewedId) return res.status(400).json({ error: "Missing IDs" });
@@ -28,11 +28,10 @@ router.post('/log', async (req, res) => {
   }
 });
 
-// 2. GET VISITORS FOR A USER
+// GET VISITORS FOR A USER
 router.get('/list/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
-    // Get the last 50 views for this user
     const { data: views, error: viewError } = await supabaseAdmin
       .from('profile_views')
       .select('viewer_id, created_at')
@@ -43,10 +42,8 @@ router.get('/list/:userId', async (req, res) => {
     if (viewError) throw viewError;
     if (!views || views.length === 0) return res.json({ visitors: [] });
 
-    // Get unique viewer IDs
     const viewerIds = [...new Set(views.map(v => v.viewer_id))];
 
-    // Fetch profile details for those viewers
     const { data: users, error: userError } = await supabaseAdmin
       .from('users')
       .select('id, name, age, location, photo_url, community, is_verified')
@@ -54,7 +51,6 @@ router.get('/list/:userId', async (req, res) => {
 
     if (userError) throw userError;
 
-    // Merge view time with user profile
     const visitors = views.map(view => {
       const user = users.find(u => u.id === view.viewer_id);
       return { ...user, viewed_at: view.created_at };
