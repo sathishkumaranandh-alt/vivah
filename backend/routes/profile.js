@@ -40,7 +40,7 @@ router.get('/recommendations/:userId', async (req, res) => {
       ...(shortlisted || []).map(s => s.shortlisted_user_id)
     ]);
 
-    // 3. Fetch all potential matches (opposite gender, active, verified first)
+        // 3. Fetch all potential matches (opposite gender, active, verified first)
     const oppositeGender = me.gender === 'male' ? 'female' : 'male';
     let query = supabaseAdmin
       .from('users')
@@ -50,10 +50,16 @@ router.get('/recommendations/:userId', async (req, res) => {
       .neq('id', userId)
       .limit(100);
 
+    // STRICTLY MATCH SAME COMMUNITY
+    // Prioritize user's own community. If not set, use their preferred community.
+    const targetCommunity = me.community || me.pref_community;
+    if (targetCommunity) {
+      query = query.eq('community', targetCommunity);
+    }
+
     // Apply basic filters from user's preferences
     if (me.pref_age_min) query = query.gte('age', me.pref_age_min);
     if (me.pref_age_max) query = query.lte('age', me.pref_age_max);
-    if (me.pref_community) query = query.ilike('community', `%${me.pref_community}%`);
 
     const { data: potential, error: pError } = await query;
     if (pError) throw pError;
