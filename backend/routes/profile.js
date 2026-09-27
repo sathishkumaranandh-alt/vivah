@@ -9,90 +9,28 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
 // ============================================
-// 2.5 SMART RECOMMENDATIONS
+// HELPER: Check if two users are matched
 // ============================================
-router.get('/recommendations/:userId', async (req, res) => {
-  const { userId } = req.params;
+async function areMatched(user1, user2) {
   try {
-    // 1. Get the current user's profile & preferences
-    const { data: me, error: meError } = await supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
-    if (meError) throw meError;
-
-    // 2. Get lists of users they already interacted with
-    const { data: sentInterests } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('interests')
-      .select('receiver_id')
-      .eq('sender_id', userId);
-
-    const { data: shortlisted } = await supabaseAdmin
-      .from('interests')
-      .select('shortlisted_user_id')
-      .eq('user_id', userId);
-
-    const excludeIds = new Set([
-      userId,
-      ...(sentInterests || []).map(i => i.receiver_id),
-      ...(shortlisted || []).map(s => s.shortlisted_user_id)
-    ]);
-
-        // 3. Fetch all potential matches (opposite gender, active, verified first)
-    const oppositeGender = me.gender === 'male' ? 'female' : 'male';
-    let query = supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('gender', oppositeGender)
-      .eq('is_suspended', false)
-      .neq('id', userId)
-      .limit(100);
-
-    // STRICTLY MATCH SAME COMMUNITY
-    // Prioritize user's own community. If not set, use their preferred community.
-    const targetCommunity = me.community || me.pref_community;
-    if (targetCommunity) {
-      query = query.eq('community', targetCommunity);
-    }
-
-    // Apply basic filters from user's preferences
-    if (me.pref_age_min) query = query.gte('age', me.pref_age_min);
-    if (me.pref_age_max) query = query.lte('age', me.pref_age_max);
-
-    const { data: potential, error: pError } = await query;
-    if (pError) throw pError;
-
-    // 4. Score the profiles based on how well they match
-    const scored = (potential || [])
-      .filter(u => !excludeIds.has(u.id))
-      .map(u => {
-        let score = 0;
-        if (u.photo_url) score += 20;            // Has photo
-        if (u.bio && u.bio.length > 20) score += 10; // Has bio
-        if (u.is_verified) score += 15;          // Verified
-        if (u.community === me.pref_community) score += 20; // Community match
-        if (u.education && me.pref_education && u.education.includes(me.pref_education)) score += 10;
-        if (u.location && me.pref_location && u.location.includes(me.pref_location)) score += 10;
-        if (u.occupation && me.pref_occupation && u.occupation.includes(me.pref_occupation)) score += 5;
-        
-        // Add random small factor so it's not always the same top profiles
-        score += Math.random() * 5;
-
-        return { ...u, match_score: score };
-      })
-      .sort((a, b) => b.match_score - a.match_score)
-      .slice(0, 6); // Return top 6 matches
-
-    res.json({ recommendations: scored });
+      .select('status')
+      .or(`and(sender_id.eq.${user1},receiver_id.eq.${user2}),and(sender_id.eq.${user2},receiver_id.eq.${user1})`)
+      .eq('status', 'accepted')
+      .limit(1);
+      
+    if (error) return false;
+    return data && data.length > 0;
   } catch (err) {
-    console.error("Recommendation error:", err);
-    res.status(500).json({ error: err.message });
+    return false;
   }
-});
+}
+
 // ============================================
-// 1. SEARCH PROFILES (MUST BE FIRST!)
+// 1. SEARCH PROFILES
 // ============================================
 router.get('/search', async (req, res) => {
   try {
@@ -108,7 +46,15 @@ router.get('/search', async (req, res) => {
 
     const { data, error } = await query.limit(50);
     if (error) throw error;
-    res.json({ results: data || [] });
+
+    // Apply basic privacy masking on search results
+    const maskedData = data.map(u => ({
+      ...u,
+      mobile: u.contact_privacy === 'public' ? u.mobile : null,
+      email: u.contact_privacy === 'public' ? u.email : null,
+    }));
+
+    res.json({ results: maskedData || [] });
   } catch (err) {
     console.error("Search error:", err);
     res.status(500).json({ error: err.message });
@@ -116,19 +62,51 @@ router.get('/search', async (req, res) => {
 });
 
 // ============================================
-// 2. GET SINGLE PROFILE (MUST BE AFTER SEARCH)
+// 2. GET SINGLE PROFILE (With Privacy Rules)
 // ============================================
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
+  const { viewerId } = req.query; // Frontend must send the viewer's ID
+  
   try {
-    const { data, error } = await supabaseAdmin
+    const { data: profile, error } = await supabaseAdmin
       .from('users')
-      .select('*') 
+      .select('*')
       .eq('id', userId)
       .single();
       
     if (error) throw error;
-    res.json({ profile: data });
+
+    const isOwner = viewerId === userId;
+    const isMatch = viewerId ? await areMatched(viewerId, userId) : false;
+
+    // If viewing own profile, show everything
+    if (isOwner) {
+      return res.json({ profile, isMatch, isOwner });
+    }
+
+    // Apply Privacy Rules
+    let maskedProfile = { ...profile };
+
+    // 1. Contact Privacy
+    if (profile.contact_privacy === 'private') {
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+    } else if (profile.contact_privacy === 'matches' && !isMatch) {
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+    }
+
+    // 2. Photo Privacy (send flag so frontend knows to blur)
+    if (profile.photo_privacy === 'private') {
+      maskedProfile.should_blur_photos = true;
+    } else if (profile.photo_privacy === 'matches' && !isMatch) {
+      maskedProfile.should_blur_photos = true;
+    } else {
+      maskedProfile.should_blur_photos = false;
+    }
+
+    res.json({ profile: maskedProfile, isMatch, isOwner });
   } catch (err) {
     console.error("Profile fetch error:", err);
     res.status(404).json({ error: "Profile not found" });
