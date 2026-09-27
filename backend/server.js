@@ -5,7 +5,7 @@ import formConfigRoutes from './routes/formConfig.js';
 import authRoutes from "./routes/auth.js";
 import visitorsRoutes from './routes/visitors.js';
 import profileRoutes from "./routes/profile.js";
-import messageRoutes from "./routes/messages.js";
+import messageRout  from "./routes/messages.js";
 import subscriptionRoutes from "./routes/subscriptions.js";
 import reportRoutes from "./routes/reports.js";
 import auditRoutes from "./routes/audit.js";
