@@ -1,106 +1,87 @@
-import express from "express";
-import supabase from "../supabaseClient.js";
+import express from 'express';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
 
+dotenv.config();
 const router = express.Router();
 
-// ----------------------------------------
-// POST /auth/signup
-// Register a new user
-// ----------------------------------------
-router.post("/signup", async (req, res) => {
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
+
+// POST /auth/signup - Handles full registration
+router.post('/signup', async (req, res) => {
+  const data = req.body;
+
+  if (!data.email || !data.password) {
+    return res.status(400).json({ error: "Email and password are required" });
+  }
+
   try {
-    const { email, password, name, age, religion, location } = req.body;
-
-    // Validate required fields
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
-    }
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
-    }
-
-    // Create user using ADMIN method (works with service_role key)
-    const { data, error } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true, // Auto-confirm since we're using service_role
-      user_metadata: { name, age, religion, location },
+    // 1. Create the user in Supabase Auth
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email: data.email,
+      password: data.password,
+      email_confirm: true, // Auto-confirm so they can log in immediately
+      user_metadata: { community: data.community }
     });
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
+    if (authError) throw authError;
+    const userId = authData.user.id;
 
-    res.status(201).json({
-      message: "User created successfully",
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-      },
-    });
+    // 2. Save the full profile to the users table
+    const { error: dbError } = await supabaseAdmin
+      .from('users')
+      .upsert([{
+        id: userId,
+        email: data.email,
+        community: data.community,
+        role: 'user',
+        profile_for: data.profile_for,
+        name: data.name,
+        gender: data.gender,
+        dob: data.dob || null,
+        marital_status: data.marital_status,
+        mother_tongue: data.mother_tongue,
+        religion: data.religion,
+        caste: data.caste,
+        sub_caste: data.sub_caste || null,
+        gothram: data.gothram || null,
+        horoscope: data.horoscope,
+        rasi: data.rasi || null,
+        nakshatra: data.nakshatra || null,
+        education: data.education,
+        occupation: data.occupation,
+        income: data.income || null,
+        college: data.college || null,
+        company: data.company || null,
+        work_location: data.work_location || null,
+        father_occ: data.father_occ || null,
+        mother_occ: data.mother_occ || null,
+        brothers: parseInt(data.brothers) || 0,
+        sisters: parseInt(data.sisters) || 0,
+        family_type: data.family_type,
+        food_pref: data.food_pref,
+        bio: data.bio || null,
+        pref_age_min: parseInt(data.pref_age_min) || null,
+        pref_age_max: parseInt(data.pref_age_max) || null,
+        pref_height: data.pref_height || null,
+        pref_community: data.pref_community || null,
+        pref_education: data.pref_education || null,
+        pref_occupation: data.pref_occupation || null,
+        pref_location: data.pref_location || null,
+        mobile: data.mobile,
+        custom_fields: data.custom_fields || {},
+        updated_at: new Date().toISOString(),
+      }]);
+
+    if (dbError) throw dbError;
+
+    res.json({ message: "Registration successful", userId });
   } catch (err) {
     console.error("Signup error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// ----------------------------------------
-// POST /auth/login
-// Login an existing user
-// ----------------------------------------
-router.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      return res.status(401).json({ error: error.message });
-    }
-
-    res.json({
-      message: "Login successful",
-      session: data.session,
-      user: data.user,
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// ----------------------------------------
-// GET /auth/me
-// Get the current user (requires session token)
-// ----------------------------------------
-router.get("/me", async (req, res) => {
-  try {
-    // Extract token from Authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "Missing or invalid Authorization header" });
-    }
-
-    const token = authHeader.split(" ")[1];
-
-    // Verify the token with Supabase
-    const { data, error } = await supabase.auth.getUser(token);
-
-    if (error || !data.user) {
-      return res.status(401).json({ error: "Invalid or expired token" });
-    }
-
-    res.json({ user: data.user });
-  } catch (err) {
-    console.error("Get user error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: err.message });
   }
 });
 
