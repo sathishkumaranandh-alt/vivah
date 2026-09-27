@@ -9,7 +9,82 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+// ============================================
+// 2.5 SMART RECOMMENDATIONS
+// ============================================
+router.get('/recommendations/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    // 1. Get the current user's profile & preferences
+    const { data: me, error: meError } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    if (meError) throw meError;
 
+    // 2. Get lists of users they already interacted with
+    const { data: sentInterests } = await supabaseAdmin
+      .from('interests')
+      .select('receiver_id')
+      .eq('sender_id', userId);
+
+    const { data: shortlisted } = await supabaseAdmin
+      .from('interests')
+      .select('shortlisted_user_id')
+      .eq('user_id', userId);
+
+    const excludeIds = new Set([
+      userId,
+      ...(sentInterests || []).map(i => i.receiver_id),
+      ...(shortlisted || []).map(s => s.shortlisted_user_id)
+    ]);
+
+    // 3. Fetch all potential matches (opposite gender, active, verified first)
+    const oppositeGender = me.gender === 'male' ? 'female' : 'male';
+    let query = supabaseAdmin
+      .from('users')
+      .select('*')
+      .eq('gender', oppositeGender)
+      .eq('is_suspended', false)
+      .neq('id', userId)
+      .limit(100);
+
+    // Apply basic filters from user's preferences
+    if (me.pref_age_min) query = query.gte('age', me.pref_age_min);
+    if (me.pref_age_max) query = query.lte('age', me.pref_age_max);
+    if (me.pref_community) query = query.ilike('community', `%${me.pref_community}%`);
+
+    const { data: potential, error: pError } = await query;
+    if (pError) throw pError;
+
+    // 4. Score the profiles based on how well they match
+    const scored = (potential || [])
+      .filter(u => !excludeIds.has(u.id))
+      .map(u => {
+        let score = 0;
+        if (u.photo_url) score += 20;            // Has photo
+        if (u.bio && u.bio.length > 20) score += 10; // Has bio
+        if (u.is_verified) score += 15;          // Verified
+        if (u.community === me.pref_community) score += 20; // Community match
+        if (u.education && me.pref_education && u.education.includes(me.pref_education)) score += 10;
+        if (u.location && me.pref_location && u.location.includes(me.pref_location)) score += 10;
+        if (u.occupation && me.pref_occupation && u.occupation.includes(me.pref_occupation)) score += 5;
+        
+        // Add random small factor so it's not always the same top profiles
+        score += Math.random() * 5;
+
+        return { ...u, match_score: score };
+      })
+      .sort((a, b) => b.match_score - a.match_score)
+      .slice(0, 6); // Return top 6 matches
+
+    res.json({ recommendations: scored });
+  } catch (err) {
+    console.error("Recommendation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // ============================================
 // 1. SEARCH PROFILES (MUST BE FIRST!)
 // ============================================
