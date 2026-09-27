@@ -94,6 +94,7 @@ router.delete('/:photoId', async (req, res) => {
       .single();
       
     if (fetchError) throw fetchError;
+    if (!photo) return res.status(404).json({ error: "Photo not found" });
 
     const { error: deleteError } = await supabaseAdmin
       .from('user_photos')
@@ -125,7 +126,7 @@ router.delete('/:photoId', async (req, res) => {
   }
 });
 
-// SET a photo as primary
+// SET a photo as primary (FIXED)
 router.patch('/:photoId/primary', async (req, res) => {
   const { photoId } = req.params;
   try {
@@ -136,13 +137,20 @@ router.patch('/:photoId/primary', async (req, res) => {
       .single();
       
     if (fetchError) throw fetchError;
+    if (!photo) return res.status(404).json({ error: "Photo not found" });
 
+    // 1. Unset all other primary photos for this user
     await supabaseAdmin.from('user_photos').update({ is_primary: false }).eq('user_id', photo.user_id);
+    
+    // 2. Set this one as primary
     await supabaseAdmin.from('user_photos').update({ is_primary: true }).eq('id', photoId);
+    
+    // 3. Update the main users table so the profile picture changes everywhere
     await supabaseAdmin.from('users').update({ photo_url: photo.photo_url }).eq('id', photo.user_id);
 
-    res.json({ success: true });
+    res.json({ success: true, message: "Main photo updated" });
   } catch (err) {
+    console.error("Set primary error:", err);
     res.status(500).json({ error: err.message });
   }
 });
