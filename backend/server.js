@@ -7,6 +7,7 @@ import authRoutes from './routes/auth.js';
 import boostRoutes from './routes/boost.js';
 import profileRoutes from './routes/profile.js';
 import messageRoutes from './routes/messages.js';
+import premiumRoutes from './routes/premium.js';
 import subscriptionRoutes from './routes/subscriptions.js';
 import reportRoutes from './routes/reports.js';
 import auditRoutes from './routes/audit.js';
@@ -40,6 +41,7 @@ app.use('/communities', communityRoutes);
 app.use('/visitors', visitorsRoutes);
 app.use('/form-config', formConfigRoutes);
 app.use('/success-stories', successStoriesRoutes);
+app.use('/premium', premiumRoutes);
 
 // Settings routes (these were part of audit.js)
 app.use('/', auditRoutes);
