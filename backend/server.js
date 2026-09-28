@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 
 // Route Imports
 import authRoutes from './routes/auth.js';
+import boostRoutes from './routes/boost.js';
 import profileRoutes from './routes/profile.js';
 import messageRoutes from './routes/messages.js';
 import subscriptionRoutes from './routes/subscriptions.js';
@@ -27,6 +28,7 @@ app.use(express.json());
 // Routes
 app.use('/auth', authRoutes);
 app.use('/profile', profileRoutes);
+app.use('/boost', boostRoutes);
 app.use('/messages', messageRoutes);
 app.use('/subscriptions', subscriptionRoutes);
 app.use('/reports', reportRoutes);
