@@ -28,22 +28,43 @@ router.post('/log', async (req, res) => {
   }
 });
 
-// GET VISITORS FOR A USER
+// GET VISITORS FOR A USER (PREMIUM ONLY)
 router.get('/list/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
-    // 1. Get ALL views for this user (ordered newest first)
+    // 1. Check if the user has an active Gold or Platinum subscription
+    const { data: sub } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan, status, expires_at')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    const isPremium = sub && (sub.plan === 'gold' || sub.plan === 'platinum');
+
+    if (!isPremium) {
+      return res.json({ 
+        visitors: [], 
+        isPremium: false, 
+        message: "Upgrade to Gold or Platinum to see who viewed your profile" 
+      });
+    }
+
+    // 2. Fetch visitors
     const { data: views, error: viewError } = await supabaseAdmin
       .from('profile_views')
       .select('viewer_id, created_at')
       .eq('viewed_id', userId)
       .order('created_at', { ascending: false })
-      .limit(100); // Fetch up to 100 recent views
+      .limit(100);
 
     if (viewError) throw viewError;
-    if (!views || views.length === 0) return res.json({ visitors: [] });
+    if (!views || views.length === 0) return res.json({ visitors: [], isPremium: true });
 
-    // 2. DEDUPLICATE: Keep only the most recent view per unique viewer
+    // 3. Deduplicate
     const uniqueViews = [];
     const seenViewers = new Set();
     for (const view of views) {
@@ -55,7 +76,6 @@ router.get('/list/:userId', async (req, res) => {
 
     const viewerIds = [...seenViewers];
 
-    // 3. Fetch profile details for these unique viewers
     const { data: users, error: userError } = await supabaseAdmin
       .from('users')
       .select('id, name, age, location, photo_url, community, is_verified')
@@ -63,13 +83,12 @@ router.get('/list/:userId', async (req, res) => {
 
     if (userError) throw userError;
 
-    // 4. Merge the unique view time with the user profile
     const visitors = uniqueViews.map(view => {
       const user = users.find(u => u.id === view.viewer_id);
       return { ...user, viewed_at: view.created_at };
     }).filter(v => v.id);
 
-    res.json({ visitors });
+    res.json({ visitors, isPremium: true });
   } catch (err) {
     console.error("Visitors list error:", err);
     res.status(500).json({ error: err.message });
