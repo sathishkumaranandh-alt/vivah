@@ -4,10 +4,8 @@ import dotenv from 'dotenv';
 
 // Route Imports
 import authRoutes from './routes/auth.js';
-import boostRoutes from './routes/boost.js';
 import profileRoutes from './routes/profile.js';
 import messageRoutes from './routes/messages.js';
-import premiumRoutes from './routes/premium.js';
 import subscriptionRoutes from './routes/subscriptions.js';
 import reportRoutes from './routes/reports.js';
 import auditRoutes from './routes/audit.js';
@@ -18,6 +16,9 @@ import communityRoutes from './routes/communities.js';
 import visitorsRoutes from './routes/visitors.js';
 import formConfigRoutes from './routes/formConfig.js';
 import successStoriesRoutes from './routes/successStories.js';
+import boostRoutes from './routes/boost.js';
+import premiumRoutes from './routes/premium.js';
+import plansRoutes from './routes/plans.js';
 
 dotenv.config();
 const app = express();
@@ -29,7 +30,6 @@ app.use(express.json());
 // Routes
 app.use('/auth', authRoutes);
 app.use('/profile', profileRoutes);
-app.use('/boost', boostRoutes);
 app.use('/messages', messageRoutes);
 app.use('/subscriptions', subscriptionRoutes);
 app.use('/reports', reportRoutes);
@@ -41,9 +41,11 @@ app.use('/communities', communityRoutes);
 app.use('/visitors', visitorsRoutes);
 app.use('/form-config', formConfigRoutes);
 app.use('/success-stories', successStoriesRoutes);
+app.use('/boost', boostRoutes);
 app.use('/premium', premiumRoutes);
+app.use('/plans', plansRoutes);
 
-// Settings routes (these were part of audit.js)
+// Settings routes (part of audit.js)
 app.use('/', auditRoutes);
 
 // Health check
