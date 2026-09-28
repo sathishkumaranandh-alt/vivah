@@ -10,7 +10,40 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const MAX_PHOTOS = 7;
+// Default max photos (fallback if plan not found)
+const DEFAULT_MAX_PHOTOS = 3;
+
+// ============================================
+// HELPER: Get user's max photo limit from plan permissions
+// ============================================
+async function getUserMaxPhotos(userId) {
+  try {
+    // Find user's active subscription
+    const { data: sub } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan, status, expires_at')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    const planName = sub?.plan || 'Free';
+
+    // Get the plan
+    const { data: planData } = await supabaseAdmin
+      .from('membership_plans')
+      .select('permissions')
+      .ilike('name', planName)
+      .eq('is_active', true)
+      .single();
+
+    return planData?.permissions?.max_photos ?? DEFAULT_MAX_PHOTOS;
+  } catch (err) {
+    return DEFAULT_MAX_PHOTOS;
+  }
+}
 
 // GET all photos for a user
 router.get('/:userId', async (req, res) => {
@@ -30,18 +63,26 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
-// ADD a new photo
+// ADD a new photo (with plan-based limit)
 router.post('/add', async (req, res) => {
   const { user_id, photo_url, is_primary, is_private } = req.body;
   try {
+    // Get user's plan-based limit
+    const maxPhotos = await getUserMaxPhotos(user_id);
+
     const { count, error: countError } = await supabaseAdmin
       .from('user_photos')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', user_id);
-    
+
     if (countError) throw countError;
-    if (count >= MAX_PHOTOS) {
-      return res.status(400).json({ error: `Maximum ${MAX_PHOTOS} photos allowed` });
+
+    if (count >= maxPhotos) {
+      return res.status(403).json({
+        error: `Your plan allows only ${maxPhotos} photo${maxPhotos !== 1 ? "s" : ""}. Upgrade to upload more.`,
+        limit: maxPhotos,
+        requiresUpgrade: true,
+      });
     }
 
     if (is_primary || count === 0) {
@@ -75,7 +116,6 @@ router.put('/:userId/privacy', async (req, res) => {
       .from('user_photos')
       .update({ is_private })
       .eq('user_id', userId);
-
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -92,7 +132,7 @@ router.delete('/:photoId', async (req, res) => {
       .select('*')
       .eq('id', photoId)
       .single();
-      
+
     if (fetchError) throw fetchError;
     if (!photo) return res.status(404).json({ error: "Photo not found" });
 
@@ -126,7 +166,7 @@ router.delete('/:photoId', async (req, res) => {
   }
 });
 
-// SET a photo as primary (FIXED)
+// SET a photo as primary
 router.patch('/:photoId/primary', async (req, res) => {
   const { photoId } = req.params;
   try {
@@ -135,17 +175,12 @@ router.patch('/:photoId/primary', async (req, res) => {
       .select('*')
       .eq('id', photoId)
       .single();
-      
+
     if (fetchError) throw fetchError;
     if (!photo) return res.status(404).json({ error: "Photo not found" });
 
-    // 1. Unset all other primary photos for this user
     await supabaseAdmin.from('user_photos').update({ is_primary: false }).eq('user_id', photo.user_id);
-    
-    // 2. Set this one as primary
     await supabaseAdmin.from('user_photos').update({ is_primary: true }).eq('id', photoId);
-    
-    // 3. Update the main users table so the profile picture changes everywhere
     await supabaseAdmin.from('users').update({ photo_url: photo.photo_url }).eq('id', photo.user_id);
 
     res.json({ success: true, message: "Main photo updated" });
