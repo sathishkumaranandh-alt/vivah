@@ -30,7 +30,7 @@ async function hasInterestOrMatch(user1, user2) {
 }
 
 // ============================================
-// 1. SEARCH PROFILES
+// 1. SEARCH PROFILES (with boost sorting)
 // ============================================
 router.get('/search', async (req, res) => {
   try {
@@ -47,13 +47,27 @@ router.get('/search', async (req, res) => {
     const { data, error } = await query.limit(50);
     if (error) throw error;
 
-    const maskedData = data.map(u => ({
+    const now = new Date();
+
+    // Sort: Boosted profiles first, then verified, then the rest
+    const sortedData = (data || []).sort((a, b) => {
+      const aBoosted = a.boost_expires_at && new Date(a.boost_expires_at) > now;
+      const bBoosted = b.boost_expires_at && new Date(b.boost_expires_at) > now;
+      if (aBoosted && !bBoosted) return -1;
+      if (!aBoosted && bBoosted) return 1;
+      if (a.is_verified && !b.is_verified) return -1;
+      if (!a.is_verified && b.is_verified) return 1;
+      return 0;
+    });
+
+    const maskedData = sortedData.map(u => ({
       ...u,
       mobile: u.contact_privacy === 'public' ? u.mobile : null,
       email: u.contact_privacy === 'public' ? u.email : null,
+      is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
     }));
 
-    res.json({ results: maskedData || [] });
+    res.json({ results: maskedData });
   } catch (err) {
     console.error("Search error:", err);
     res.status(500).json({ error: err.message });
@@ -77,16 +91,18 @@ router.get('/:userId', async (req, res) => {
     if (error) throw error;
 
     const isOwner = viewerId === userId;
-    // CHANGED: Now checks for ANY interest (pending or accepted)
     const hasInteracted = viewerId ? await hasInterestOrMatch(viewerId, userId) : false;
 
+    const now = new Date();
+    const isBoosted = profile.boost_expires_at ? new Date(profile.boost_expires_at) > now : false;
+
     if (isOwner) {
-      return res.json({ profile, isMatch: false, isOwner });
+      return res.json({ profile: { ...profile, is_boosted: isBoosted }, isMatch: false, isOwner });
     }
 
     let maskedProfile = { ...profile };
 
-    // 1. Contact Privacy
+    // Contact Privacy
     if (profile.contact_privacy === 'private') {
       maskedProfile.mobile = null;
       maskedProfile.email = null;
@@ -95,7 +111,7 @@ router.get('/:userId', async (req, res) => {
       maskedProfile.email = null;
     }
 
-    // 2. Photo Privacy (changed to allow pending interest)
+    // Photo Privacy (allow if there is any pending or accepted interest)
     if (profile.photo_privacy === 'private') {
       maskedProfile.should_blur_photos = true;
     } else if (profile.photo_privacy === 'matches' && !hasInteracted) {
@@ -103,6 +119,8 @@ router.get('/:userId', async (req, res) => {
     } else {
       maskedProfile.should_blur_photos = false;
     }
+
+    maskedProfile.is_boosted = isBoosted;
 
     res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner });
   } catch (err) {
@@ -135,19 +153,23 @@ router.put('/:userId', async (req, res) => {
 });
 
 // ============================================
-// 4. ADMIN ROUTES (keep existing)
+// 4. ADMIN STATS
 // ============================================
 router.get('/admin/stats', async (req, res) => {
   try {
-    const { data: users, error } = await supabaseAdmin.from('users').select('gender, is_verified, is_suspended');
+    const { data: users, error } = await supabaseAdmin
+      .from('users')
+      .select('gender, is_verified, is_suspended, boost_expires_at');
     if (error) throw error;
 
+    const now = new Date();
     const stats = {
       totalUsers: users.length,
       maleUsers: users.filter(u => u.gender === 'male').length,
       femaleUsers: users.filter(u => u.gender === 'female').length,
       verifiedUsers: users.filter(u => u.is_verified).length,
       suspendedUsers: users.filter(u => u.is_suspended).length,
+      boostedUsers: users.filter(u => u.boost_expires_at && new Date(u.boost_expires_at) > now).length,
       totalMessages: 0,
     };
     res.json(stats);
@@ -156,6 +178,9 @@ router.get('/admin/stats', async (req, res) => {
   }
 });
 
+// ============================================
+// 5. ADMIN: GET ALL USERS
+// ============================================
 router.get('/admin/users', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
@@ -167,6 +192,9 @@ router.get('/admin/users', async (req, res) => {
   }
 });
 
+// ============================================
+// 6. ADMIN: GET USER DETAILS
+// ============================================
 router.get('/admin/users/:id/details', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', req.params.id).single();
@@ -177,6 +205,9 @@ router.get('/admin/users/:id/details', async (req, res) => {
   }
 });
 
+// ============================================
+// 7. ADMIN: VERIFY USER
+// ============================================
 router.patch('/admin/users/:id/verify', async (req, res) => {
   try {
     const { is_verified } = req.body;
@@ -186,6 +217,9 @@ router.patch('/admin/users/:id/verify', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// 8. ADMIN: SUSPEND USER
+// ============================================
 router.patch('/admin/users/:id/suspend', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -195,6 +229,9 @@ router.patch('/admin/users/:id/suspend', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// 9. ADMIN: UNSUSPEND USER
+// ============================================
 router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: false, suspend_reason: null }).eq('id', req.params.id).select().single();
@@ -203,6 +240,9 @@ router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// 10. ADMIN: CHANGE ROLE
+// ============================================
 router.patch('/admin/users/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
@@ -212,6 +252,9 @@ router.patch('/admin/users/:id/role', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// 11. ADMIN: DELETE USER
+// ============================================
 router.delete('/admin/users/:id', async (req, res) => {
   try {
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
