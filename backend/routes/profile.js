@@ -11,15 +11,15 @@ const supabaseAdmin = createClient(
 );
 
 // ============================================
-// HELPER: Check if two users are matched
+// HELPER: Check if two users have ANY interest (pending or accepted)
 // ============================================
-async function areMatched(user1, user2) {
+async function hasInterestOrMatch(user1, user2) {
   try {
     const { data, error } = await supabaseAdmin
       .from('interests')
       .select('status')
       .or(`and(sender_id.eq.${user1},receiver_id.eq.${user2}),and(sender_id.eq.${user2},receiver_id.eq.${user1})`)
-      .eq('status', 'accepted')
+      .in('status', ['pending', 'accepted'])
       .limit(1);
       
     if (error) return false;
@@ -47,7 +47,6 @@ router.get('/search', async (req, res) => {
     const { data, error } = await query.limit(50);
     if (error) throw error;
 
-    // Apply basic privacy masking on search results
     const maskedData = data.map(u => ({
       ...u,
       mobile: u.contact_privacy === 'public' ? u.mobile : null,
@@ -66,7 +65,7 @@ router.get('/search', async (req, res) => {
 // ============================================
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
-  const { viewerId } = req.query; // Frontend must send the viewer's ID
+  const { viewerId } = req.query;
   
   try {
     const { data: profile, error } = await supabaseAdmin
@@ -78,35 +77,34 @@ router.get('/:userId', async (req, res) => {
     if (error) throw error;
 
     const isOwner = viewerId === userId;
-    const isMatch = viewerId ? await areMatched(viewerId, userId) : false;
+    // CHANGED: Now checks for ANY interest (pending or accepted)
+    const hasInteracted = viewerId ? await hasInterestOrMatch(viewerId, userId) : false;
 
-    // If viewing own profile, show everything
     if (isOwner) {
-      return res.json({ profile, isMatch, isOwner });
+      return res.json({ profile, isMatch: false, isOwner });
     }
 
-    // Apply Privacy Rules
     let maskedProfile = { ...profile };
 
     // 1. Contact Privacy
     if (profile.contact_privacy === 'private') {
       maskedProfile.mobile = null;
       maskedProfile.email = null;
-    } else if (profile.contact_privacy === 'matches' && !isMatch) {
+    } else if (profile.contact_privacy === 'matches' && !hasInteracted) {
       maskedProfile.mobile = null;
       maskedProfile.email = null;
     }
 
-    // 2. Photo Privacy (send flag so frontend knows to blur)
+    // 2. Photo Privacy (changed to allow pending interest)
     if (profile.photo_privacy === 'private') {
       maskedProfile.should_blur_photos = true;
-    } else if (profile.photo_privacy === 'matches' && !isMatch) {
+    } else if (profile.photo_privacy === 'matches' && !hasInteracted) {
       maskedProfile.should_blur_photos = true;
     } else {
       maskedProfile.should_blur_photos = false;
     }
 
-    res.json({ profile: maskedProfile, isMatch, isOwner });
+    res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner });
   } catch (err) {
     console.error("Profile fetch error:", err);
     res.status(404).json({ error: "Profile not found" });
@@ -137,7 +135,7 @@ router.put('/:userId', async (req, res) => {
 });
 
 // ============================================
-// 4. ADMIN STATS
+// 4. ADMIN ROUTES (keep existing)
 // ============================================
 router.get('/admin/stats', async (req, res) => {
   try {
@@ -158,9 +156,6 @@ router.get('/admin/stats', async (req, res) => {
   }
 });
 
-// ============================================
-// 5. ADMIN: GET ALL USERS
-// ============================================
 router.get('/admin/users', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
@@ -172,9 +167,6 @@ router.get('/admin/users', async (req, res) => {
   }
 });
 
-// ============================================
-// 6. ADMIN: GET USER DETAILS
-// ============================================
 router.get('/admin/users/:id/details', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', req.params.id).single();
@@ -185,9 +177,6 @@ router.get('/admin/users/:id/details', async (req, res) => {
   }
 });
 
-// ============================================
-// 7. ADMIN: VERIFY USER
-// ============================================
 router.patch('/admin/users/:id/verify', async (req, res) => {
   try {
     const { is_verified } = req.body;
@@ -197,9 +186,6 @@ router.patch('/admin/users/:id/verify', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 8. ADMIN: SUSPEND USER
-// ============================================
 router.patch('/admin/users/:id/suspend', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -209,9 +195,6 @@ router.patch('/admin/users/:id/suspend', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 9. ADMIN: UNSUSPEND USER
-// ============================================
 router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: false, suspend_reason: null }).eq('id', req.params.id).select().single();
@@ -220,9 +203,6 @@ router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 10. ADMIN: CHANGE ROLE
-// ============================================
 router.patch('/admin/users/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
@@ -232,9 +212,6 @@ router.patch('/admin/users/:id/role', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 11. ADMIN: DELETE USER
-// ============================================
 router.delete('/admin/users/:id', async (req, res) => {
   try {
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
