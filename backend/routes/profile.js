@@ -101,7 +101,7 @@ async function hasPhotoApproval(requesterId, ownerId) {
 }
 
 // ============================================
-// 1. SEARCH PROFILES (with boost sorting)
+// 1. SEARCH PROFILES
 // ============================================
 router.get('/search', async (req, res) => {
   try {
@@ -120,7 +120,6 @@ router.get('/search', async (req, res) => {
 
     const now = new Date();
 
-    // Sort: Boosted profiles first, then verified, then the rest
     const sortedData = (data || []).sort((a, b) => {
       const aBoosted = a.boost_expires_at && new Date(a.boost_expires_at) > now;
       const bBoosted = b.boost_expires_at && new Date(b.boost_expires_at) > now;
@@ -146,7 +145,7 @@ router.get('/search', async (req, res) => {
 });
 
 // ============================================
-// 2. GET SINGLE PROFILE (With Privacy Rules)
+// 2. GET SINGLE PROFILE (With Paid Member Lock)
 // ============================================
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
@@ -165,9 +164,9 @@ router.get('/:userId', async (req, res) => {
     const hasInteracted = viewerId ? await hasInterestOrMatch(viewerId, userId) : false;
     const viewerPerms = isOwner ? {} : await getViewerPermissions(viewerId);
     const viewerIsPaid = isOwner ? false : await isPaidUser(viewerId);
+    const ownerIsPaid = await isPaidUser(userId);
     const hasApproval = viewerId ? await hasPhotoApproval(viewerId, userId) : false;
 
-    // Check viewer's verified status
     let viewerVerified = false;
     if (viewerId) {
       const { data: v } = await supabaseAdmin.from('users').select('is_verified').eq('id', viewerId).single();
@@ -178,12 +177,10 @@ router.get('/:userId', async (req, res) => {
     const isBoosted = profile.boost_expires_at ? new Date(profile.boost_expires_at) > now : false;
 
     if (isOwner) {
-      return res.json({ profile: { ...profile, is_boosted: isBoosted }, isMatch: false, isOwner });
+      return res.json({ profile: { ...profile, is_boosted: isBoosted, owner_is_paid: ownerIsPaid }, isMatch: false, isOwner });
     }
 
-    // ============================================
     // 1. CHECK OWNER'S VISIBILITY SETTING
-    // ============================================
     const visibility = profile.profile_visibility || 'everyone';
     let allowedToSee = true;
 
@@ -201,6 +198,7 @@ router.get('/:userId', async (req, res) => {
           gender: profile.gender,
           is_verified: profile.is_verified,
           is_boosted: isBoosted,
+          owner_is_paid: ownerIsPaid,
           hidden_by_owner: true,
         },
         isMatch: false,
@@ -209,10 +207,9 @@ router.get('/:userId', async (req, res) => {
       });
     }
 
-    // ============================================
-    // 2. MASK PRIVATE FIELDS
-    // ============================================
+    // 2. MASK FIELDS
     let maskedProfile = { ...profile };
+    let lockedByPaidMember = false;
 
     // Contact Privacy
     if (profile.contact_privacy === 'private') {
@@ -227,19 +224,33 @@ router.get('/:userId', async (req, res) => {
       maskedProfile.email = null;
     }
 
-    // DOB, Horoscope, Income (Premium)
-    if (!viewerPerms.see_dob) maskedProfile.dob = null;
-    if (!viewerPerms.see_horoscope) {
+    // PAID MEMBER LOCK: if the owner is paid and viewer can't view paid profiles
+    if (ownerIsPaid && !viewerPerms.can_view_paid_profiles && !hasApproval) {
+      lockedByPaidMember = true;
+      maskedProfile.dob = null;
       maskedProfile.rasi = null;
       maskedProfile.nakshatra = null;
       maskedProfile.gothram = null;
+      maskedProfile.income = null;
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+    } else {
+      // Standard premium masks
+      if (!viewerPerms.see_dob) maskedProfile.dob = null;
+      if (!viewerPerms.see_horoscope) {
+        maskedProfile.rasi = null;
+        maskedProfile.nakshatra = null;
+        maskedProfile.gothram = null;
+      }
+      if (!viewerPerms.see_income) maskedProfile.income = null;
     }
-    if (!viewerPerms.see_income) maskedProfile.income = null;
 
-    // Photo Blur Logic
+    // 3. PHOTO BLUR LOGIC
     let shouldBlur = false;
 
-    if (profile.photo_privacy === 'private') {
+    if (lockedByPaidMember) {
+      shouldBlur = true;
+    } else if (profile.photo_privacy === 'private') {
       shouldBlur = true;
     } else if (profile.photo_privacy === 'matches' && !hasInteracted) {
       shouldBlur = true;
@@ -247,13 +258,14 @@ router.get('/:userId', async (req, res) => {
       shouldBlur = true;
     }
 
-    // If viewer has approved photo request, unblur
     if (hasApproval) shouldBlur = false;
 
     maskedProfile.should_blur_photos = shouldBlur;
     maskedProfile.is_boosted = isBoosted;
     maskedProfile.viewer_is_paid = viewerIsPaid;
     maskedProfile.viewer_has_approval = hasApproval;
+    maskedProfile.owner_is_paid = ownerIsPaid;
+    maskedProfile.locked_by_paid_member = lockedByPaidMember;
 
     res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner: false });
   } catch (err) {
@@ -323,7 +335,6 @@ router.get('/recommendations/:userId', async (req, res) => {
       .neq('id', userId)
       .limit(100);
 
-    // STRICTLY MATCH SAME COMMUNITY
     const targetCommunity = me.community || me.pref_community;
     if (targetCommunity) {
       query = query.eq('community', targetCommunity);
