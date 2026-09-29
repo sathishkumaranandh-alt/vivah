@@ -17,6 +17,7 @@ import visitorsRoutes from './routes/visitors.js';
 import formConfigRoutes from './routes/formConfig.js';
 import successStoriesRoutes from './routes/successStories.js';
 import boostRoutes from './routes/boost.js';
+import photoRequestsRoutes from './routes/photoRequests.js';
 import premiumRoutes from './routes/premium.js';
 import plansRoutes from './routes/plans.js';
 
@@ -41,6 +42,7 @@ app.use('/communities', communityRoutes);
 app.use('/visitors', visitorsRoutes);
 app.use('/form-config', formConfigRoutes);
 app.use('/success-stories', successStoriesRoutes);
+app.use('/photo-requests', photoRequestsRoutes);
 app.use('/boost', boostRoutes);
 app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
