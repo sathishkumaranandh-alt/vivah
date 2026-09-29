@@ -1,340 +1,416 @@
-import React, { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import supabase from "../supabaseClient";
-import { toast } from "../utils/toast";
+import express from 'express';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "https://vivah-2rc8.onrender.com";
+dotenv.config();
+const router = express.Router();
 
-const PERMISSION_FIELDS = [
-  { key: "daily_interests", label: "Daily Interests Limit", type: "number" },
-  { key: "daily_recommendations", label: "Daily Recommendations", type: "number" },
-  { key: "max_photos", label: "Max Photos", type: "number" },
-  { key: "advanced_search", label: "Advanced Search Access", type: "bool" },
-  { key: "see_visitors", label: "See Who Viewed Me", type: "bool" },
-  { key: "unlimited_chat", label: "Unlimited Chat", type: "bool" },
-  { key: "profile_boost", label: "Profile Boost Included", type: "bool" },
-  { key: "contact_access", label: "View Contact Info", type: "bool" },
-  { key: "priority_support", label: "Priority Support", type: "bool" },
-  { key: "see_dob", label: "See Date of Birth", type: "bool" },
-  { key: "see_horoscope", label: "See Horoscope Details", type: "bool" },
-  { key: "see_income", label: "See Income Details", type: "bool" },
-  { key: "interest_to_anyone", label: "Send Interest to Any Community", type: "bool" },
-  { key: "see_full_photo", label: "See Full Photos (No Blur)", type: "bool" },
-  { key: "request_photo", label: "Can Request to View Photos", type: "bool" },
-  { key: "can_view_paid_profiles", label: "Can View Paid Member Profiles", type: "bool" },
-];
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
-const DEFAULT_PERMISSIONS = {
-  daily_interests: 5,
-  daily_recommendations: 5,
-  max_photos: 3,
-  advanced_search: false,
-  see_visitors: false,
-  unlimited_chat: false,
-  profile_boost: false,
-  contact_access: false,
-  priority_support: false,
-  see_dob: false,
-  see_horoscope: false,
-  see_income: false,
-  interest_to_anyone: false,
-  see_full_photo: false,
-  request_photo: true,
-  can_view_paid_profiles: false,
-};
-
-function AdminPlans() {
-  const navigate = useNavigate();
-  const [plans, setPlans] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 900);
-  const [editingPlan, setEditingPlan] = useState(null);
-  const [showCreate, setShowCreate] = useState(false);
-
-  const [newPlan, setNewPlan] = useState({
-    name: "",
-    price: 0,
-    duration_days: 30,
-    permissions: { ...DEFAULT_PERMISSIONS },
-    display_order: 0,
-  });
-
-  useEffect(() => {
-    const h = () => setIsMobile(window.innerWidth < 900);
-    window.addEventListener("resize", h);
-    return () => window.removeEventListener("resize", h);
-  }, []);
-
-  useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { navigate("/login"); return; }
-
-      const { data: profile } = await supabase.from("users").select("role").eq("id", user.id).single();
-      if (!profile || profile.role !== "admin") { navigate("/dashboard"); return; }
-
-      try {
-        const res = await fetch(`${BACKEND_URL}/plans/admin/all`);
-        if (res.ok) {
-          const data = await res.json();
-          setPlans(data.plans || []);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [navigate]);
-
-  const reload = async () => {
-    const res = await fetch(`${BACKEND_URL}/plans/admin/all`);
-    if (res.ok) {
-      const data = await res.json();
-      setPlans(data.plans || []);
-    }
-  };
-
-  const handleCreate = async () => {
-    if (!newPlan.name.trim()) return toast.error("Plan name is required");
-    setSaving(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/plans`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...newPlan,
-          features: Object.entries(newPlan.permissions)
-            .filter(([_, v]) => v === true)
-            .map(([k]) => k),
-        }),
-      });
-      if (res.ok) {
-        toast.success("Plan created!");
-        setShowCreate(false);
-        setNewPlan({ name: "", price: 0, duration_days: 30, permissions: { ...DEFAULT_PERMISSIONS }, display_order: 0 });
-        await reload();
-      } else {
-        const err = await res.json();
-        toast.error(err.error || "Failed to create plan");
-      }
-    } catch { toast.error("Network error"); } finally { setSaving(false); }
-  };
-
-  const handleUpdate = async () => {
-    if (!editingPlan) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/plans/${editingPlan.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: editingPlan.name,
-          price: editingPlan.price,
-          duration_days: editingPlan.duration_days,
-          permissions: editingPlan.permissions,
-          is_active: editingPlan.is_active,
-          display_order: editingPlan.display_order,
-        }),
-      });
-      if (res.ok) {
-        toast.success("Plan updated!");
-        setEditingPlan(null);
-        await reload();
-      } else {
-        toast.error("Update failed");
-      }
-    } catch { toast.error("Network error"); } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (plan) => {
-    if (plan.name === "Free") return toast.error("Free plan cannot be deleted");
-    if (!window.confirm(`Delete plan "${plan.name}"?`)) return;
-    try {
-      const res = await fetch(`${BACKEND_URL}/plans/${plan.id}`, { method: "DELETE" });
-      if (res.ok) {
-        toast.success("Plan deleted");
-        await reload();
-      }
-    } catch { toast.error("Delete failed"); }
-  };
-
-  const togglePermission = (permKey) => {
-    setEditingPlan(prev => ({
-      ...prev,
-      permissions: { ...prev.permissions, [permKey]: !prev.permissions[permKey] },
-    }));
-  };
-
-  const updatePermissionValue = (permKey, value) => {
-    setEditingPlan(prev => ({
-      ...prev,
-      permissions: { ...prev.permissions, [permKey]: value },
-    }));
-  };
-
-  const toggleNewPermission = (permKey) => {
-    setNewPlan(prev => ({
-      ...prev,
-      permissions: { ...prev.permissions, [permKey]: !prev.permissions[permKey] },
-    }));
-  };
-
-  const updateNewPermissionValue = (permKey, value) => {
-    setNewPlan(prev => ({
-      ...prev,
-      permissions: { ...prev.permissions, [permKey]: value },
-    }));
-  };
-
-  if (loading) return <div style={{ padding: 60, textAlign: "center" }}>Loading...</div>;
-
-  const S = {
-    page: { maxWidth: "1100px", margin: "0 auto", padding: isMobile ? "16px" : "32px" },
-    header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", flexWrap: "wrap", gap: 12 },
-    h1: { fontFamily: "'Playfair Display', serif", fontSize: isMobile ? "22px" : "28px", color: "#8B0A2E", marginBottom: "4px" },
-    sub: { color: "#8a6b6b", fontSize: "13px", margin: 0 },
-    btn: { background: "#8B0A2E", color: "white", border: "none", padding: "12px 20px", borderRadius: "10px", fontWeight: 700, cursor: "pointer", fontSize: "14px", fontFamily: "inherit" },
-    backBtn: { background: "#e5e7eb", color: "#8B0A2E", padding: "10px 18px", borderRadius: 8, textDecoration: "none", fontWeight: "bold", fontSize: 14 },
-    card: { background: "white", borderRadius: "14px", padding: "20px", border: "1px solid #f0e0e0", marginBottom: "16px" },
-    label: { display: "block", fontSize: "11px", fontWeight: 700, color: "#555", marginBottom: "6px", textTransform: "uppercase" },
-    input: { width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #d1d5db", fontSize: "14px", fontFamily: "inherit", outline: "none", background: "#FFF9F5", boxSizing: "border-box" },
-    permsGrid: { display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: "10px", marginTop: "12px" },
-    permRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: "#FFF9F5", borderRadius: "8px", border: "1px solid #f0e0e0" },
-    permLabel: { fontSize: "13px", color: "#2D1B1B", fontWeight: 600 },
-    planCard: { background: "white", borderRadius: "14px", padding: "20px", border: "1px solid #f0e0e0", marginBottom: "12px" },
-    planHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px", flexWrap: "wrap", gap: 12 },
-    planName: { fontFamily: "'Playfair Display', serif", fontSize: "20px", fontWeight: 700, color: "#8B0A2E", marginBottom: "4px" },
-    planPrice: { fontSize: "14px", color: "#8a6b6b" },
-    planBtns: { display: "flex", gap: 8, flexWrap: "wrap" },
-    smallBtn: { border: "none", padding: "8px 14px", borderRadius: "6px", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
-  };
-
-  return (
-    <div style={S.page}>
-      <div style={S.header}>
-        <div>
-          <h1 style={S.h1}>💎 Membership Plans</h1>
-          <p style={S.sub}>Create, edit, and control plan features & permissions</p>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => setShowCreate(!showCreate)} style={S.btn}>
-            {showCreate ? "✕ Cancel" : "➕ Create Plan"}
-          </button>
-          <Link to="/admin" style={S.backBtn}>← Dashboard</Link>
-        </div>
-      </div>
-
-      {showCreate && (
-        <div style={S.card}>
-          <h3 style={{ color: "#8B0A2E", marginTop: 0, marginBottom: "16px" }}>➕ New Plan</h3>
-
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
-            <div><label style={S.label}>Plan Name</label><input style={S.input} value={newPlan.name} onChange={(e) => setNewPlan({ ...newPlan, name: e.target.value })} placeholder="e.g. Diamond" /></div>
-            <div><label style={S.label}>Price (₹)</label><input type="number" style={S.input} value={newPlan.price} onChange={(e) => setNewPlan({ ...newPlan, price: parseInt(e.target.value) || 0 })} /></div>
-            <div><label style={S.label}>Duration (days)</label><input type="number" style={S.input} value={newPlan.duration_days} onChange={(e) => setNewPlan({ ...newPlan, duration_days: parseInt(e.target.value) || 0 })} /></div>
-            <div><label style={S.label}>Display Order</label><input type="number" style={S.input} value={newPlan.display_order} onChange={(e) => setNewPlan({ ...newPlan, display_order: parseInt(e.target.value) || 0 })} /></div>
-          </div>
-
-          <h4 style={{ fontSize: 13, color: "#8B0A2E", marginBottom: 10, textTransform: "uppercase" }}>Permissions</h4>
-          <div style={S.permsGrid}>
-            {PERMISSION_FIELDS.map((p) => (
-              <div key={p.key} style={S.permRow}>
-                <span style={S.permLabel}>{p.label}</span>
-                {p.type === "bool" ? (
-                  <input type="checkbox" checked={newPlan.permissions[p.key] || false} onChange={() => toggleNewPermission(p.key)} style={{ width: 20, height: 20, accentColor: "#8B0A2E" }} />
-                ) : (
-                  <input type="number" value={newPlan.permissions[p.key] || 0} onChange={(e) => updateNewPermissionValue(p.key, parseInt(e.target.value) || 0)} style={{ width: 80, padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
-                )}
-              </div>
-            ))}
-          </div>
-
-          <button onClick={handleCreate} disabled={saving} style={{ ...S.btn, marginTop: 16, opacity: saving ? 0.6 : 1 }}>
-            {saving ? "Creating..." : "Create Plan"}
-          </button>
-        </div>
-      )}
-
-      {plans.map((plan) => {
-        const isEditing = editingPlan?.id === plan.id;
-        const perms = isEditing ? editingPlan.permissions : (plan.permissions || {});
-
-        return (
-          <div key={plan.id} style={S.planCard}>
-            <div style={S.planHeader}>
-              <div>
-                {isEditing ? (
-                  <input style={{ ...S.input, fontSize: 18, fontWeight: 700 }} value={editingPlan.name} onChange={(e) => setEditingPlan({ ...editingPlan, name: e.target.value })} />
-                ) : (
-                  <>
-                    <div style={S.planName}>{plan.name}</div>
-                    <div style={S.planPrice}>
-                      ₹{plan.price} · {plan.duration_days === 9999 ? "Lifetime" : `${plan.duration_days} days`}
-                      {!plan.is_active && <span style={{ marginLeft: 8, background: "#fee2e2", color: "#991b1b", padding: "2px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700 }}>INACTIVE</span>}
-                    </div>
-                  </>
-                )}
-              </div>
-              <div style={S.planBtns}>
-                {isEditing ? (
-                  <>
-                    <button onClick={handleUpdate} disabled={saving} style={{ ...S.smallBtn, background: "#16a34a", color: "white", opacity: saving ? 0.6 : 1 }}>
-                      {saving ? "Saving..." : "💾 Save"}
-                    </button>
-                    <button onClick={() => setEditingPlan(null)} style={{ ...S.smallBtn, background: "#f3f4f6", color: "#374151" }}>Cancel</button>
-                  </>
-                ) : (
-                  <>
-                    <button onClick={() => setEditingPlan({ ...plan, permissions: plan.permissions || {} })} style={{ ...S.smallBtn, background: "#eff6ff", color: "#1e40af" }}>✏️ Edit</button>
-                    {plan.name !== "Free" && (
-                      <button onClick={() => handleDelete(plan)} style={{ ...S.smallBtn, background: "#fee2e2", color: "#b91c1c" }}>🗑️ Delete</button>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {isEditing && (
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <div><label style={S.label}>Price (₹)</label><input type="number" style={S.input} value={editingPlan.price} onChange={(e) => setEditingPlan({ ...editingPlan, price: parseInt(e.target.value) || 0 })} /></div>
-                <div><label style={S.label}>Duration (days)</label><input type="number" style={S.input} value={editingPlan.duration_days} onChange={(e) => setEditingPlan({ ...editingPlan, duration_days: parseInt(e.target.value) || 0 })} /></div>
-                <div><label style={S.label}>Active?</label>
-                  <select style={S.input} value={editingPlan.is_active} onChange={(e) => setEditingPlan({ ...editingPlan, is_active: e.target.value === "true" })}>
-                    <option value="true">Yes</option>
-                    <option value="false">No</option>
-                  </select>
-                </div>
-              </div>
-            )}
-
-            <div style={S.permsGrid}>
-              {PERMISSION_FIELDS.map((p) => (
-                <div key={p.key} style={S.permRow}>
-                  <span style={S.permLabel}>{p.label}</span>
-                  {p.type === "bool" ? (
-                    isEditing ? (
-                      <input type="checkbox" checked={perms[p.key] || false} onChange={() => togglePermission(p.key)} style={{ width: 20, height: 20, accentColor: "#8B0A2E" }} />
-                    ) : (
-                      <span style={{ fontSize: 16 }}>{perms[p.key] ? "✅" : "❌"}</span>
-                    )
-                  ) : (
-                    isEditing ? (
-                      <input type="number" value={perms[p.key] || 0} onChange={(e) => updatePermissionValue(p.key, parseInt(e.target.value) || 0)} style={{ width: 80, padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, textAlign: "center", fontFamily: "inherit" }} />
-                    ) : (
-                      <strong style={{ color: "#8B0A2E", fontSize: 14 }}>{perms[p.key] || 0}</strong>
-                    )
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+async function hasInterestOrMatch(user1, user2) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('interests')
+      .select('status')
+      .or(`and(sender_id.eq.${user1},receiver_id.eq.${user2}),and(sender_id.eq.${user2},receiver_id.eq.${user1})`)
+      .in('status', ['pending', 'accepted'])
+      .limit(1);
+    if (error) return false;
+    return data && data.length > 0;
+  } catch { return false; }
 }
 
-export default AdminPlans;
+async function getViewerPermissions(viewerId) {
+  try {
+    if (!viewerId) return {};
+    const { data: sub } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan, status, expires_at')
+      .eq('user_id', viewerId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    const planName = sub?.plan || 'Free';
+
+    const { data: planData } = await supabaseAdmin
+      .from('membership_plans')
+      .select('permissions')
+      .ilike('name', planName)
+      .eq('is_active', true)
+      .single();
+
+    return planData?.permissions || {};
+  } catch { return {}; }
+}
+
+async function isPaidUser(userId) {
+  if (!userId) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan, status, expires_at')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .in('plan', ['Gold', 'Platinum', 'gold', 'platinum'])
+      .limit(1)
+      .single();
+    return !!data;
+  } catch { return false; }
+}
+
+async function hasPhotoApproval(requesterId, ownerId) {
+  if (!requesterId || !ownerId) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('photo_requests')
+      .select('status')
+      .eq('requester_id', requesterId)
+      .eq('owner_id', ownerId)
+      .eq('status', 'approved')
+      .single();
+    return !!data;
+  } catch { return false; }
+}
+
+// 1. SEARCH
+router.get('/search', async (req, res) => {
+  try {
+    const { gender, age_min, age_max, location, community, religion } = req.query;
+    let query = supabaseAdmin.from('users').select('*');
+
+    if (gender) query = query.eq('gender', gender);
+    if (age_min) query = query.gte('age', parseInt(age_min));
+    if (age_max) query = query.lte('age', parseInt(age_max));
+    if (location) query = query.ilike('location', `%${location}%`);
+    if (community) query = query.eq('community', community);
+    if (religion) query = query.eq('religion', religion);
+
+    const { data, error } = await query.limit(50);
+    if (error) throw error;
+
+    const now = new Date();
+    const sortedData = (data || []).sort((a, b) => {
+      const aBoosted = a.boost_expires_at && new Date(a.boost_expires_at) > now;
+      const bBoosted = b.boost_expires_at && new Date(b.boost_expires_at) > now;
+      if (aBoosted && !bBoosted) return -1;
+      if (!aBoosted && bBoosted) return 1;
+      if (a.is_verified && !b.is_verified) return -1;
+      if (!a.is_verified && b.is_verified) return 1;
+      return 0;
+    });
+
+    const maskedData = sortedData.map(u => ({
+      ...u,
+      mobile: u.contact_privacy === 'public' ? u.mobile : null,
+      email: u.contact_privacy === 'public' ? u.email : null,
+      is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
+    }));
+
+    res.json({ results: maskedData });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. GET SINGLE PROFILE — CORRECTED LOGIC
+router.get('/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const { viewerId } = req.query;
+
+  try {
+    const { data: profile, error } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (error) throw error;
+
+    const isOwner = viewerId === userId;
+    const hasInteracted = viewerId ? await hasInterestOrMatch(viewerId, userId) : false;
+    const viewerPerms = isOwner ? {} : await getViewerPermissions(viewerId);
+    const viewerIsPaid = isOwner ? false : await isPaidUser(viewerId);
+    const ownerIsPaid = await isPaidUser(userId);
+    const hasApproval = viewerId ? await hasPhotoApproval(viewerId, userId) : false;
+
+    let viewerVerified = false;
+    if (viewerId) {
+      const { data: v } = await supabaseAdmin.from('users').select('is_verified').eq('id', viewerId).single();
+      viewerVerified = !!v?.is_verified;
+    }
+
+    const now = new Date();
+    const isBoosted = profile.boost_expires_at ? new Date(profile.boost_expires_at) > now : false;
+
+    if (isOwner) {
+      return res.json({
+        profile: { ...profile, is_boosted: isBoosted, owner_is_paid: ownerIsPaid },
+        isMatch: false,
+        isOwner
+      });
+    }
+
+    // Owner's visibility
+    const visibility = profile.profile_visibility || 'everyone';
+    let allowedToSee = true;
+    if (visibility === 'paid' && !viewerIsPaid) allowedToSee = false;
+    else if (visibility === 'verified' && !viewerVerified) allowedToSee = false;
+    else if (visibility === 'matches' && !hasInteracted) allowedToSee = false;
+
+    if (!allowedToSee) {
+      return res.json({
+        profile: {
+          id: profile.id,
+          name: profile.name,
+          age: profile.age,
+          location: profile.location,
+          gender: profile.gender,
+          is_verified: profile.is_verified,
+          is_boosted: isBoosted,
+          owner_is_paid: ownerIsPaid,
+          hidden_by_owner: true,
+        },
+        isMatch: false,
+        isOwner: false,
+        hidden: true,
+      });
+    }
+
+    let maskedProfile = { ...profile };
+    let lockedByPaidMember = false;
+
+    // Contact privacy from owner's settings
+    if (profile.contact_privacy === 'private') {
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+    } else if (profile.contact_privacy === 'matches' && !hasInteracted) {
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+    }
+
+    // *** KEY FIX ***
+    // Only lock if OWNER IS PAID and VIEWER is not allowed to see paid profiles
+    if (ownerIsPaid && !viewerPerms.can_view_paid_profiles && !hasApproval) {
+      lockedByPaidMember = true;
+      maskedProfile.dob = null;
+      maskedProfile.rasi = null;
+      maskedProfile.nakshatra = null;
+      maskedProfile.gothram = null;
+      maskedProfile.income = null;
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+    }
+    // Otherwise, if owner is FREE, viewer sees everything (subject only to owner's own privacy settings above)
+
+    // Photo blur
+    let shouldBlur = false;
+    if (lockedByPaidMember) {
+      shouldBlur = true;
+    } else if (profile.photo_privacy === 'private') {
+      shouldBlur = true;
+    } else if (profile.photo_privacy === 'matches' && !hasInteracted) {
+      shouldBlur = true;
+    }
+    // Note: removed the "!viewerPerms.see_full_photo" clause — that was blurring free-free interactions
+
+    if (hasApproval) shouldBlur = false;
+
+    maskedProfile.should_blur_photos = shouldBlur;
+    maskedProfile.is_boosted = isBoosted;
+    maskedProfile.viewer_is_paid = viewerIsPaid;
+    maskedProfile.viewer_has_approval = hasApproval;
+    maskedProfile.owner_is_paid = ownerIsPaid;
+    maskedProfile.locked_by_paid_member = lockedByPaidMember;
+
+    res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner: false });
+  } catch (err) {
+    console.error("Profile fetch error:", err);
+    res.status(404).json({ error: "Profile not found" });
+  }
+});
+
+// 3. UPDATE PROFILE (whitelist)
+router.put('/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const updates = { ...req.body };
+
+  const ALLOWED_COLUMNS = [
+    "email", "name", "age", "gender", "religion", "caste", "sub_caste",
+    "gothram", "horoscope", "rasi", "nakshatra", "location", "education",
+    "occupation", "income", "college", "company", "work_location",
+    "father_occ", "mother_occ", "brothers", "sisters", "family_type",
+    "food_pref", "bio", "photo_url", "community", "marital_status",
+    "mother_tongue", "profile_for", "dob", "mobile",
+    "pref_age_min", "pref_age_max", "pref_height", "pref_community",
+    "pref_education", "pref_occupation", "pref_location",
+    "custom_fields", "photo_privacy", "contact_privacy",
+    "profile_visibility", "updated_at",
+  ];
+
+  const safeUpdates = {};
+  for (const key of ALLOWED_COLUMNS) {
+    if (updates[key] !== undefined) safeUpdates[key] = updates[key];
+  }
+  safeUpdates.updated_at = new Date().toISOString();
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('users')
+      .update(safeUpdates)
+      .eq('id', userId)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ profile: data });
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. RECOMMENDATIONS
+router.get('/recommendations/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const { data: me, error: meError } = await supabaseAdmin
+      .from('users').select('*').eq('id', userId).single();
+    if (meError) throw meError;
+
+    const { data: sentInterests } = await supabaseAdmin
+      .from('interests').select('receiver_id').eq('sender_id', userId);
+
+    const { data: shortlisted } = await supabaseAdmin
+      .from('interests').select('shortlisted_user_id').eq('user_id', userId);
+
+    const excludeIds = new Set([
+      userId,
+      ...(sentInterests || []).map(i => i.receiver_id),
+      ...(shortlisted || []).map(s => s.shortlisted_user_id),
+    ]);
+
+    const oppositeGender = me.gender === 'male' ? 'female' : 'male';
+    let query = supabaseAdmin
+      .from('users').select('*')
+      .eq('gender', oppositeGender)
+      .eq('is_suspended', false)
+      .neq('id', userId)
+      .limit(100);
+
+    const targetCommunity = me.community || me.pref_community;
+    if (targetCommunity) query = query.eq('community', targetCommunity);
+    if (me.pref_age_min) query = query.gte('age', me.pref_age_min);
+    if (me.pref_age_max) query = query.lte('age', me.pref_age_max);
+
+    const { data: potential, error: pError } = await query;
+    if (pError) throw pError;
+
+    const now = new Date();
+    const scored = (potential || [])
+      .filter(u => !excludeIds.has(u.id))
+      .map(u => {
+        let score = 0;
+        if (u.photo_url) score += 20;
+        if (u.bio && u.bio.length > 20) score += 10;
+        if (u.is_verified) score += 15;
+        if (u.boost_expires_at && new Date(u.boost_expires_at) > now) score += 25;
+        if (u.community === me.community) score += 20;
+        score += Math.random() * 5;
+        return { ...u, match_score: score };
+      })
+      .sort((a, b) => b.match_score - a.match_score)
+      .slice(0, 6);
+
+    res.json({ recommendations: scored });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5-12. ADMIN ROUTES (unchanged)
+router.get('/admin/stats', async (req, res) => {
+  try {
+    const { data: users, error } = await supabaseAdmin
+      .from('users').select('gender, is_verified, is_suspended, boost_expires_at');
+    if (error) throw error;
+    const now = new Date();
+    res.json({
+      totalUsers: users.length,
+      maleUsers: users.filter(u => u.gender === 'male').length,
+      femaleUsers: users.filter(u => u.gender === 'female').length,
+      verifiedUsers: users.filter(u => u.is_verified).length,
+      suspendedUsers: users.filter(u => u.is_suspended).length,
+      boostedUsers: users.filter(u => u.boost_expires_at && new Date(u.boost_expires_at) > now).length,
+      totalMessages: 0,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/admin/users', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const { data, error } = await supabaseAdmin.from('users').select('*').limit(limit);
+    if (error) throw error;
+    res.json({ users: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/admin/users/:id/details', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', req.params.id).single();
+    if (error) throw error;
+    res.json({ user: data });
+  } catch { res.status(404).json({ error: "User not found" }); }
+});
+
+router.patch('/admin/users/:id/verify', async (req, res) => {
+  try {
+    const { is_verified } = req.body;
+    const { data, error } = await supabaseAdmin.from('users').update({ is_verified }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ user: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.patch('/admin/users/:id/suspend', async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: true, suspend_reason: reason }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ user: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.patch('/admin/users/:id/unsuspend', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: false, suspend_reason: null }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ user: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.patch('/admin/users/:id/role', async (req, res) => {
+  try {
+    const { role } = req.body;
+    const { data, error } = await supabaseAdmin.from('users').update({ role }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ user: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/admin/users/:id', async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
+    if (error) throw error;
+    await supabaseAdmin.from('users').delete().eq('id', req.params.id);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+export default router;
