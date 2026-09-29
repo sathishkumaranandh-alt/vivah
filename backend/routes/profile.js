@@ -21,10 +21,81 @@ async function hasInterestOrMatch(user1, user2) {
       .or(`and(sender_id.eq.${user1},receiver_id.eq.${user2}),and(sender_id.eq.${user2},receiver_id.eq.${user1})`)
       .in('status', ['pending', 'accepted'])
       .limit(1);
-      
+
     if (error) return false;
     return data && data.length > 0;
   } catch (err) {
+    return false;
+  }
+}
+
+// ============================================
+// HELPER: Get viewer's plan permissions
+// ============================================
+async function getViewerPermissions(viewerId) {
+  try {
+    if (!viewerId) return {};
+    const { data: sub } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan, status, expires_at')
+      .eq('user_id', viewerId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    const planName = sub?.plan || 'Free';
+
+    const { data: planData } = await supabaseAdmin
+      .from('membership_plans')
+      .select('permissions')
+      .ilike('name', planName)
+      .eq('is_active', true)
+      .single();
+
+    return planData?.permissions || {};
+  } catch (err) {
+    return {};
+  }
+}
+
+// ============================================
+// HELPER: Check if user has an active paid plan
+// ============================================
+async function isPaidUser(userId) {
+  if (!userId) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan, status, expires_at')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .in('plan', ['Gold', 'Platinum', 'gold', 'platinum'])
+      .limit(1)
+      .single();
+    return !!data;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================
+// HELPER: Check if user has approved photo access
+// ============================================
+async function hasPhotoApproval(requesterId, ownerId) {
+  if (!requesterId || !ownerId) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('photo_requests')
+      .select('status')
+      .eq('requester_id', requesterId)
+      .eq('owner_id', ownerId)
+      .eq('status', 'approved')
+      .single();
+    return !!data;
+  } catch {
     return false;
   }
 }
@@ -80,18 +151,28 @@ router.get('/search', async (req, res) => {
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
   const { viewerId } = req.query;
-  
+
   try {
     const { data: profile, error } = await supabaseAdmin
       .from('users')
       .select('*')
       .eq('id', userId)
       .single();
-      
+
     if (error) throw error;
 
     const isOwner = viewerId === userId;
     const hasInteracted = viewerId ? await hasInterestOrMatch(viewerId, userId) : false;
+    const viewerPerms = isOwner ? {} : await getViewerPermissions(viewerId);
+    const viewerIsPaid = isOwner ? false : await isPaidUser(viewerId);
+    const hasApproval = viewerId ? await hasPhotoApproval(viewerId, userId) : false;
+
+    // Check viewer's verified status
+    let viewerVerified = false;
+    if (viewerId) {
+      const { data: v } = await supabaseAdmin.from('users').select('is_verified').eq('id', viewerId).single();
+      viewerVerified = !!v?.is_verified;
+    }
 
     const now = new Date();
     const isBoosted = profile.boost_expires_at ? new Date(profile.boost_expires_at) > now : false;
@@ -100,6 +181,37 @@ router.get('/:userId', async (req, res) => {
       return res.json({ profile: { ...profile, is_boosted: isBoosted }, isMatch: false, isOwner });
     }
 
+    // ============================================
+    // 1. CHECK OWNER'S VISIBILITY SETTING
+    // ============================================
+    const visibility = profile.profile_visibility || 'everyone';
+    let allowedToSee = true;
+
+    if (visibility === 'paid' && !viewerIsPaid) allowedToSee = false;
+    else if (visibility === 'verified' && !viewerVerified) allowedToSee = false;
+    else if (visibility === 'matches' && !hasInteracted) allowedToSee = false;
+
+    if (!allowedToSee) {
+      return res.json({
+        profile: {
+          id: profile.id,
+          name: profile.name,
+          age: profile.age,
+          location: profile.location,
+          gender: profile.gender,
+          is_verified: profile.is_verified,
+          is_boosted: isBoosted,
+          hidden_by_owner: true,
+        },
+        isMatch: false,
+        isOwner: false,
+        hidden: true,
+      });
+    }
+
+    // ============================================
+    // 2. MASK PRIVATE FIELDS
+    // ============================================
     let maskedProfile = { ...profile };
 
     // Contact Privacy
@@ -110,19 +222,40 @@ router.get('/:userId', async (req, res) => {
       maskedProfile.mobile = null;
       maskedProfile.email = null;
     }
-
-    // Photo Privacy (allow if there is any pending or accepted interest)
-    if (profile.photo_privacy === 'private') {
-      maskedProfile.should_blur_photos = true;
-    } else if (profile.photo_privacy === 'matches' && !hasInteracted) {
-      maskedProfile.should_blur_photos = true;
-    } else {
-      maskedProfile.should_blur_photos = false;
+    if (!viewerPerms.contact_access) {
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
     }
 
-    maskedProfile.is_boosted = isBoosted;
+    // DOB, Horoscope, Income (Premium)
+    if (!viewerPerms.see_dob) maskedProfile.dob = null;
+    if (!viewerPerms.see_horoscope) {
+      maskedProfile.rasi = null;
+      maskedProfile.nakshatra = null;
+      maskedProfile.gothram = null;
+    }
+    if (!viewerPerms.see_income) maskedProfile.income = null;
 
-    res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner });
+    // Photo Blur Logic
+    let shouldBlur = false;
+
+    if (profile.photo_privacy === 'private') {
+      shouldBlur = true;
+    } else if (profile.photo_privacy === 'matches' && !hasInteracted) {
+      shouldBlur = true;
+    } else if (!viewerPerms.see_full_photo && !hasApproval) {
+      shouldBlur = true;
+    }
+
+    // If viewer has approved photo request, unblur
+    if (hasApproval) shouldBlur = false;
+
+    maskedProfile.should_blur_photos = shouldBlur;
+    maskedProfile.is_boosted = isBoosted;
+    maskedProfile.viewer_is_paid = viewerIsPaid;
+    maskedProfile.viewer_has_approval = hasApproval;
+
+    res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner: false });
   } catch (err) {
     console.error("Profile fetch error:", err);
     res.status(404).json({ error: "Profile not found" });
@@ -135,7 +268,7 @@ router.get('/:userId', async (req, res) => {
 router.put('/:userId', async (req, res) => {
   const { userId } = req.params;
   const updates = req.body;
-  
+
   try {
     const { data, error } = await supabaseAdmin
       .from('users')
@@ -143,7 +276,7 @@ router.put('/:userId', async (req, res) => {
       .eq('id', userId)
       .select()
       .single();
-      
+
     if (error) throw error;
     res.json({ profile: data });
   } catch (err) {
@@ -153,7 +286,83 @@ router.put('/:userId', async (req, res) => {
 });
 
 // ============================================
-// 4. ADMIN STATS
+// 4. SMART RECOMMENDATIONS (strict same community)
+// ============================================
+router.get('/recommendations/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const { data: me, error: meError } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    if (meError) throw meError;
+
+    const { data: sentInterests } = await supabaseAdmin
+      .from('interests')
+      .select('receiver_id')
+      .eq('sender_id', userId);
+
+    const { data: shortlisted } = await supabaseAdmin
+      .from('interests')
+      .select('shortlisted_user_id')
+      .eq('user_id', userId);
+
+    const excludeIds = new Set([
+      userId,
+      ...(sentInterests || []).map(i => i.receiver_id),
+      ...(shortlisted || []).map(s => s.shortlisted_user_id),
+    ]);
+
+    const oppositeGender = me.gender === 'male' ? 'female' : 'male';
+    let query = supabaseAdmin
+      .from('users')
+      .select('*')
+      .eq('gender', oppositeGender)
+      .eq('is_suspended', false)
+      .neq('id', userId)
+      .limit(100);
+
+    // STRICTLY MATCH SAME COMMUNITY
+    const targetCommunity = me.community || me.pref_community;
+    if (targetCommunity) {
+      query = query.eq('community', targetCommunity);
+    }
+
+    if (me.pref_age_min) query = query.gte('age', me.pref_age_min);
+    if (me.pref_age_max) query = query.lte('age', me.pref_age_max);
+
+    const { data: potential, error: pError } = await query;
+    if (pError) throw pError;
+
+    const now = new Date();
+    const scored = (potential || [])
+      .filter(u => !excludeIds.has(u.id))
+      .map(u => {
+        let score = 0;
+        if (u.photo_url) score += 20;
+        if (u.bio && u.bio.length > 20) score += 10;
+        if (u.is_verified) score += 15;
+        if (u.boost_expires_at && new Date(u.boost_expires_at) > now) score += 25;
+        if (u.community === me.community) score += 20;
+        if (u.education && me.pref_education && u.education.includes(me.pref_education)) score += 10;
+        if (u.location && me.pref_location && u.location.includes(me.pref_location)) score += 10;
+        if (u.occupation && me.pref_occupation && u.occupation.includes(me.pref_occupation)) score += 5;
+        score += Math.random() * 5;
+        return { ...u, match_score: score };
+      })
+      .sort((a, b) => b.match_score - a.match_score)
+      .slice(0, 6);
+
+    res.json({ recommendations: scored });
+  } catch (err) {
+    console.error("Recommendation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// 5. ADMIN STATS
 // ============================================
 router.get('/admin/stats', async (req, res) => {
   try {
@@ -179,7 +388,7 @@ router.get('/admin/stats', async (req, res) => {
 });
 
 // ============================================
-// 5. ADMIN: GET ALL USERS
+// 6. ADMIN: GET ALL USERS
 // ============================================
 router.get('/admin/users', async (req, res) => {
   try {
@@ -193,7 +402,7 @@ router.get('/admin/users', async (req, res) => {
 });
 
 // ============================================
-// 6. ADMIN: GET USER DETAILS
+// 7. ADMIN: GET USER DETAILS
 // ============================================
 router.get('/admin/users/:id/details', async (req, res) => {
   try {
@@ -206,7 +415,7 @@ router.get('/admin/users/:id/details', async (req, res) => {
 });
 
 // ============================================
-// 7. ADMIN: VERIFY USER
+// 8. ADMIN: VERIFY USER
 // ============================================
 router.patch('/admin/users/:id/verify', async (req, res) => {
   try {
@@ -218,7 +427,7 @@ router.patch('/admin/users/:id/verify', async (req, res) => {
 });
 
 // ============================================
-// 8. ADMIN: SUSPEND USER
+// 9. ADMIN: SUSPEND USER
 // ============================================
 router.patch('/admin/users/:id/suspend', async (req, res) => {
   try {
@@ -230,7 +439,7 @@ router.patch('/admin/users/:id/suspend', async (req, res) => {
 });
 
 // ============================================
-// 9. ADMIN: UNSUSPEND USER
+// 10. ADMIN: UNSUSPEND USER
 // ============================================
 router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   try {
@@ -241,7 +450,7 @@ router.patch('/admin/users/:id/unsuspend', async (req, res) => {
 });
 
 // ============================================
-// 10. ADMIN: CHANGE ROLE
+// 11. ADMIN: CHANGE ROLE
 // ============================================
 router.patch('/admin/users/:id/role', async (req, res) => {
   try {
@@ -253,7 +462,7 @@ router.patch('/admin/users/:id/role', async (req, res) => {
 });
 
 // ============================================
-// 11. ADMIN: DELETE USER
+// 12. ADMIN: DELETE USER
 // ============================================
 router.delete('/admin/users/:id', async (req, res) => {
   try {
