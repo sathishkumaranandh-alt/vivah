@@ -26,6 +26,19 @@ async function hasInterestOrMatch(user1, user2) {
 async function getViewerPermissions(viewerId) {
   try {
     if (!viewerId) return {};
+
+    // Get viewer's custom permissions
+    const { data: userData } = await supabaseAdmin
+      .from('users')
+      .select('custom_permissions')
+      .eq('id', viewerId)
+      .single();
+
+    const customPerms = userData?.custom_permissions || {};
+
+    // If custom permissions has any keys, they override plan
+    const hasCustomPerms = Object.keys(customPerms).length > 0;
+
     const { data: sub } = await supabaseAdmin
       .from('subscriptions')
       .select('plan, status, expires_at')
@@ -45,8 +58,13 @@ async function getViewerPermissions(viewerId) {
       .eq('is_active', true)
       .single();
 
-    return planData?.permissions || {};
-  } catch { return {}; }
+    const planPerms = planData?.permissions || {};
+
+    // Merge: custom permissions override plan
+    return { ...planPerms, ...customPerms };
+  } catch (err) {
+    return {};
+  }
 }
 
 async function isPaidUser(userId) {
