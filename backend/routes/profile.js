@@ -97,10 +97,13 @@ async function hasPhotoApproval(requesterId, ownerId) {
   } catch { return false; }
 }
 
-// 1. SEARCH
+
+// ============================================
+// 1. SEARCH PROFILES (with privacy + paid member lock)
+// ============================================
 router.get('/search', async (req, res) => {
   try {
-    const { gender, age_min, age_max, location, community, religion } = req.query;
+    const { gender, age_min, age_max, location, community, religion, viewerId } = req.query;
     let query = supabaseAdmin.from('users').select('*');
 
     if (gender) query = query.eq('gender', gender);
@@ -113,7 +116,10 @@ router.get('/search', async (req, res) => {
     const { data, error } = await query.limit(50);
     if (error) throw error;
 
+    const viewerPerms = viewerId ? await getViewerPermissions(viewerId) : {};
+
     const now = new Date();
+
     const sortedData = (data || []).sort((a, b) => {
       const aBoosted = a.boost_expires_at && new Date(a.boost_expires_at) > now;
       const bBoosted = b.boost_expires_at && new Date(b.boost_expires_at) > now;
@@ -124,19 +130,53 @@ router.get('/search', async (req, res) => {
       return 0;
     });
 
-    const maskedData = sortedData.map(u => ({
-      ...u,
-      mobile: u.contact_privacy === 'public' ? u.mobile : null,
-      email: u.contact_privacy === 'public' ? u.email : null,
-      is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
-    }));
+    // Check each user's paid status (batch)
+    const userIds = sortedData.map(u => u.id);
+    const paidUserIds = new Set();
+    if (userIds.length > 0) {
+      const { data: subs } = await supabaseAdmin
+        .from('subscriptions')
+        .select('user_id, plan, status, expires_at')
+        .in('user_id', userIds)
+        .eq('status', 'active')
+        .gte('expires_at', new Date().toISOString())
+        .in('plan', ['Gold', 'Platinum', 'gold', 'platinum']);
+
+      (subs || []).forEach(s => paidUserIds.add(s.user_id));
+    }
+
+    const maskedData = sortedData.map(u => {
+      const ownerIsPaid = paidUserIds.has(u.id);
+      const isViewer = viewerId === u.id;
+
+      // Determine if this profile should be blurred for the viewer
+      let shouldBlur = false;
+      if (!isViewer) {
+        if (ownerIsPaid && !viewerPerms.can_view_paid_profiles) {
+          shouldBlur = true;
+        } else if (u.photo_privacy === 'private') {
+          shouldBlur = true;
+        } else if (u.photo_privacy === 'matches' && !viewerPerms.can_view_paid_profiles && ownerIsPaid) {
+          shouldBlur = true;
+        }
+      }
+
+      return {
+        ...u,
+        mobile: u.contact_privacy === 'public' ? u.mobile : null,
+        email: u.contact_privacy === 'public' ? u.email : null,
+        is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
+        owner_is_paid: ownerIsPaid,
+        should_blur_photo: shouldBlur,
+      };
+    });
 
     res.json({ results: maskedData });
   } catch (err) {
+    console.error("Search error:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 // 2. GET SINGLE PROFILE — CORRECTED LOGIC
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
