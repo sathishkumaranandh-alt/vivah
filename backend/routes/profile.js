@@ -97,7 +97,6 @@ async function hasPhotoApproval(requesterId, ownerId) {
   } catch { return false; }
 }
 
-
 // ============================================
 // 1. SEARCH PROFILES (with community default + paid lock)
 // ============================================
@@ -111,15 +110,10 @@ router.get('/search', async (req, res) => {
     let query = supabaseAdmin.from('users').select('*');
 
     if (gender) query = query.eq('gender', gender);
-    if (age_min) query = query.gte('age', parseInt(age_min));
-    if (age_max) query = query.lte('age', parseInt(age_max));
     if (location) query = query.ilike('location', `%${location}%`);
     if (religion) query = query.eq('religion', religion);
 
-    // Community resolution:
-    // 1. If user explicitly picked a community → use it
-    // 2. Else, if allCommunities=true → show all
-    // 3. Else if viewerId provided → default to viewer's community
+    // Community resolution
     if (community) {
       query = query.eq('community', community);
     } else if (allCommunities !== 'true' && viewerId) {
@@ -133,13 +127,24 @@ router.get('/search', async (req, res) => {
       }
     }
 
-    const { data, error } = await query.limit(50);
+    const { data, error } = await query.limit(200);
     if (error) throw error;
 
     const viewerPerms = viewerId ? await getViewerPermissions(viewerId) : {};
     const now = new Date();
 
-    const sortedData = (data || []).sort((a, b) => {
+    // Filter by age AFTER fetching (to include users with no age set)
+    const ageMin = age_min ? parseInt(age_min) : null;
+    const ageMax = age_max ? parseInt(age_max) : null;
+
+    const filteredByAge = (data || []).filter(u => {
+      if (!u.age || u.age === 0) return true; // include users without age
+      if (ageMin !== null && u.age < ageMin) return false;
+      if (ageMax !== null && u.age > ageMax) return false;
+      return true;
+    });
+
+    const sortedData = filteredByAge.sort((a, b) => {
       const aBoosted = a.boost_expires_at && new Date(a.boost_expires_at) > now;
       const bBoosted = b.boost_expires_at && new Date(b.boost_expires_at) > now;
       if (aBoosted && !bBoosted) return -1;
@@ -163,11 +168,11 @@ router.get('/search', async (req, res) => {
       (subs || []).forEach(s => paidUserIds.add(s.user_id));
     }
 
-    const maskedData = sortedData.map(u => {
+    const maskedData = sortedData.slice(0, 50).map(u => {
       const ownerIsPaid = paidUserIds.has(u.id);
       const isViewer = viewerId === u.id;
 
-      // Free user viewing Paid member → blur (unless has can_view_paid_profiles)
+      // Photo blur logic
       let shouldBlur = false;
       if (!isViewer) {
         if (ownerIsPaid && !viewerPerms.can_view_paid_profiles) {
@@ -179,10 +184,20 @@ router.get('/search', async (req, res) => {
         }
       }
 
+      // Contact visibility: owner's PUBLIC setting wins
+      let showContact = false;
+      if (isViewer) {
+        showContact = true;
+      } else if (u.contact_privacy === 'public') {
+        showContact = true; // owner explicitly public → show
+      } else if (viewerPerms.contact_access) {
+        showContact = true; // viewer has permission from plan
+      }
+
       return {
         ...u,
-        mobile: u.contact_privacy === 'public' ? u.mobile : null,
-        email: u.contact_privacy === 'public' ? u.email : null,
+        mobile: showContact ? u.mobile : null,
+        email: showContact ? u.email : null,
         is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
         owner_is_paid: ownerIsPaid,
         should_blur_photo: shouldBlur,
@@ -195,6 +210,7 @@ router.get('/search', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // 2. GET SINGLE PROFILE — CORRECTED LOGIC
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
