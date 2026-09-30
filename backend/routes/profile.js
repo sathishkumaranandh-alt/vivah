@@ -26,13 +26,11 @@ async function hasInterestOrMatch(user1, user2) {
 async function getViewerPermissions(viewerId) {
   try {
     if (!viewerId) return {};
-
     const { data: userData } = await supabaseAdmin
       .from('users')
       .select('custom_permissions')
       .eq('id', viewerId)
       .single();
-
     const customPerms = userData?.custom_permissions || {};
 
     const { data: sub } = await supabaseAdmin
@@ -44,7 +42,6 @@ async function getViewerPermissions(viewerId) {
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
-
     const planName = sub?.plan || 'Free';
 
     const { data: planData } = await supabaseAdmin
@@ -53,7 +50,6 @@ async function getViewerPermissions(viewerId) {
       .ilike('name', planName)
       .eq('is_active', true)
       .single();
-
     const planPerms = planData?.permissions || {};
 
     return { ...planPerms, ...customPerms };
@@ -90,6 +86,33 @@ async function hasPhotoApproval(requesterId, ownerId) {
   } catch { return false; }
 }
 
+async function hasContactApproval(requesterId, ownerId) {
+  if (!requesterId || !ownerId) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('contact_requests')
+      .select('status')
+      .eq('requester_id', requesterId)
+      .eq('owner_id', ownerId)
+      .eq('status', 'approved')
+      .single();
+    return !!data;
+  } catch { return false; }
+}
+
+async function getContactRequestStatus(requesterId, ownerId) {
+  if (!requesterId || !ownerId) return 'none';
+  try {
+    const { data } = await supabaseAdmin
+      .from('contact_requests')
+      .select('status')
+      .eq('requester_id', requesterId)
+      .eq('owner_id', ownerId)
+      .single();
+    return data?.status || 'none';
+  } catch { return 'none'; }
+}
+
 function computeAgeFromDob(dob) {
   if (!dob) return null;
   try {
@@ -102,7 +125,7 @@ function computeAgeFromDob(dob) {
 }
 
 // ============================================
-// 1. SEARCH PROFILES
+// 1. SEARCH
 // ============================================
 router.get('/search', async (req, res) => {
   try {
@@ -172,7 +195,7 @@ router.get('/search', async (req, res) => {
       const ownerIsPaid = paidUserIds.has(u.id);
       const isViewer = viewerId === u.id;
 
-      // PHOTO BLUR — consistent with profile view
+      // PHOTO BLUR
       let shouldBlur = false;
       if (!isViewer) {
         if (ownerIsPaid && !canViewPaid) shouldBlur = true;
@@ -180,12 +203,28 @@ router.get('/search', async (req, res) => {
         else if (u.photo_privacy === 'matches' && !canViewPaid) shouldBlur = true;
       }
 
-      // CONTACT — expose flags instead of hiding completely
+      // CONTACT
       let contactMasked = false;
+      let contactLockedReason = null;
+
       if (!isViewer) {
-        if (u.contact_privacy === 'private') contactMasked = true;
-        else if (u.contact_privacy === 'matches' && !hasContactAccess) contactMasked = true;
-        else if (!hasContactAccess && u.contact_privacy !== 'public') contactMasked = true;
+        if (u.contact_privacy === 'public') {
+          contactMasked = false;
+        } else if (u.contact_privacy === 'private') {
+          contactMasked = true;
+          contactLockedReason = 'owner_privacy';
+        } else if (u.contact_privacy === 'matches') {
+          // matches setting - show if paid viewer with contact_access, else lock
+          if (hasContactAccess && canViewPaid) {
+            contactMasked = false;
+          } else {
+            contactMasked = true;
+            contactLockedReason = 'owner_privacy';
+          }
+        } else if (ownerIsPaid && !canViewPaid) {
+          contactMasked = true;
+          contactLockedReason = 'plan_upgrade';
+        }
       }
 
       const { _finalAge, ...rest } = u;
@@ -196,6 +235,7 @@ router.get('/search', async (req, res) => {
         mobile: contactMasked ? null : u.mobile,
         email: contactMasked ? null : u.email,
         contact_masked: contactMasked,
+        contact_locked_reason: contactLockedReason,
         is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
         owner_is_paid: ownerIsPaid,
         should_blur_photo: shouldBlur,
@@ -227,6 +267,8 @@ router.get('/:userId', async (req, res) => {
     const viewerIsPaid = isOwner ? false : await isPaidUser(viewerId);
     const ownerIsPaid = await isPaidUser(userId);
     const hasApproval = viewerId ? await hasPhotoApproval(viewerId, userId) : false;
+    const hasContactApproved = viewerId ? await hasContactApproval(viewerId, userId) : false;
+    const contactRequestStatus = viewerId ? await getContactRequestStatus(viewerId, userId) : 'none';
 
     let viewerVerified = false;
     if (viewerId) {
@@ -267,15 +309,25 @@ router.get('/:userId', async (req, res) => {
     let maskedProfile = { ...profile };
     let lockedByPaidMember = false;
     let contactMasked = false;
+    let contactLockedReason = null;
 
-    // Contact visibility
+    // CONTACT logic
     let showContact = false;
     if (profile.contact_privacy === 'public') showContact = true;
     else if (profile.contact_privacy === 'matches' && hasInteracted) showContact = true;
-    else if (viewerPerms.contact_access && profile.contact_privacy !== 'private') showContact = true;
+    else if (viewerPerms.contact_access && profile.contact_privacy !== 'private' && viewerIsPaid) showContact = true;
+    if (hasContactApproved) showContact = true;
 
     if (!showContact) {
       contactMasked = true;
+      // Distinguish reason
+      if (profile.contact_privacy === 'private' || profile.contact_privacy === 'matches') {
+        contactLockedReason = 'owner_privacy';
+      } else if (ownerIsPaid && !viewerPerms.can_view_paid_profiles) {
+        contactLockedReason = 'plan_upgrade';
+      } else {
+        contactLockedReason = 'plan_upgrade';
+      }
       maskedProfile.mobile = null;
       maskedProfile.email = null;
     }
@@ -288,9 +340,13 @@ router.get('/:userId', async (req, res) => {
       maskedProfile.nakshatra = null;
       maskedProfile.gothram = null;
       maskedProfile.income = null;
-      maskedProfile.mobile = null;
-      maskedProfile.email = null;
-      contactMasked = true;
+      // Don't override contact if request approved
+      if (!hasContactApproved) {
+        maskedProfile.mobile = null;
+        maskedProfile.email = null;
+        contactMasked = true;
+        if (!contactLockedReason) contactLockedReason = 'plan_upgrade';
+      }
     } else {
       if (!viewerPerms.see_dob) maskedProfile.dob = null;
       if (!viewerPerms.see_horoscope) {
@@ -315,6 +371,8 @@ router.get('/:userId', async (req, res) => {
     maskedProfile.owner_is_paid = ownerIsPaid;
     maskedProfile.locked_by_paid_member = lockedByPaidMember;
     maskedProfile.contact_masked = contactMasked;
+    maskedProfile.contact_locked_reason = contactLockedReason;
+    maskedProfile.contact_request_status = contactRequestStatus;
 
     res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner: false });
   } catch (err) {
@@ -323,9 +381,7 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
-// ============================================
-// 3. UPDATE PROFILE (whitelist)
-// ============================================
+// 3. UPDATE PROFILE
 router.put('/:userId', async (req, res) => {
   const { userId } = req.params;
   const updates = { ...req.body };
@@ -358,9 +414,7 @@ router.put('/:userId', async (req, res) => {
   }
 });
 
-// ============================================
-// 4. SMART RECOMMENDATIONS
-// ============================================
+// 4. RECOMMENDATIONS
 router.get('/recommendations/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
@@ -408,7 +462,7 @@ router.get('/recommendations/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ADMIN ROUTES (unchanged)
+// ADMIN ROUTES
 router.get('/admin/stats', async (req, res) => {
   try {
     const { data: users, error } = await supabaseAdmin.from('users').select('gender, is_verified, is_suspended, boost_expires_at');
