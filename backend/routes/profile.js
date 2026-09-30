@@ -10,9 +10,6 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ============================================
-// HELPER: Check if two users have ANY interest (pending or accepted)
-// ============================================
 async function hasInterestOrMatch(user1, user2) {
   try {
     const { data, error } = await supabaseAdmin
@@ -26,9 +23,6 @@ async function hasInterestOrMatch(user1, user2) {
   } catch { return false; }
 }
 
-// ============================================
-// HELPER: Get viewer's permissions (plan + custom override)
-// ============================================
 async function getViewerPermissions(viewerId) {
   try {
     if (!viewerId) return {};
@@ -66,9 +60,6 @@ async function getViewerPermissions(viewerId) {
   } catch { return {}; }
 }
 
-// ============================================
-// HELPER: Check if user has active paid plan
-// ============================================
 async function isPaidUser(userId) {
   if (!userId) return false;
   try {
@@ -85,9 +76,6 @@ async function isPaidUser(userId) {
   } catch { return false; }
 }
 
-// ============================================
-// HELPER: Check approved photo access
-// ============================================
 async function hasPhotoApproval(requesterId, ownerId) {
   if (!requesterId || !ownerId) return false;
   try {
@@ -102,9 +90,6 @@ async function hasPhotoApproval(requesterId, ownerId) {
   } catch { return false; }
 }
 
-// ============================================
-// HELPER: Compute age from DOB
-// ============================================
 function computeAgeFromDob(dob) {
   if (!dob) return null;
   try {
@@ -113,48 +98,37 @@ function computeAgeFromDob(dob) {
     const diff = Date.now() - birth.getTime();
     const ageMs = 1000 * 60 * 60 * 24 * 365.25;
     return Math.floor(diff / ageMs);
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 // ============================================
-// 1. SEARCH PROFILES (age-from-DOB + community default + paid lock)
+// 1. SEARCH PROFILES
 // ============================================
 router.get('/search', async (req, res) => {
   try {
-    const {
-      gender, age_min, age_max, location, community, religion,
-      viewerId, allCommunities
-    } = req.query;
+    const { gender, age_min, age_max, location, community, religion, viewerId, allCommunities } = req.query;
 
     let query = supabaseAdmin.from('users').select('*');
-
     if (gender) query = query.eq('gender', gender);
     if (location) query = query.ilike('location', `%${location}%`);
     if (religion) query = query.eq('religion', religion);
 
-    // Community resolution
     if (community) {
       query = query.eq('community', community);
     } else if (allCommunities !== 'true' && viewerId) {
-      const { data: viewer } = await supabaseAdmin
-        .from('users')
-        .select('community')
-        .eq('id', viewerId)
-        .single();
-      if (viewer?.community) {
-        query = query.eq('community', viewer.community);
-      }
+      const { data: viewer } = await supabaseAdmin.from('users').select('community').eq('id', viewerId).single();
+      if (viewer?.community) query = query.eq('community', viewer.community);
     }
 
     const { data, error } = await query.limit(200);
     if (error) throw error;
 
     const viewerPerms = viewerId ? await getViewerPermissions(viewerId) : {};
+    const canViewPaid = viewerPerms.can_view_paid_profiles === true;
+    const hasContactAccess = viewerPerms.contact_access === true;
+
     const now = new Date();
 
-    // Enrich: compute age from DOB if missing
     const enriched = (data || []).map(u => ({
       ...u,
       _finalAge: u.age && u.age > 0 ? u.age : computeAgeFromDob(u.dob)
@@ -163,7 +137,6 @@ router.get('/search', async (req, res) => {
     const ageMin = age_min ? parseInt(age_min) : null;
     const ageMax = age_max ? parseInt(age_max) : null;
 
-    // Age filter: include users with unknown age
     const filteredByAge = enriched.filter(u => {
       const age = u._finalAge;
       if (age === null || age === undefined || age === 0) return true;
@@ -182,7 +155,6 @@ router.get('/search', async (req, res) => {
       return 0;
     });
 
-    // Batch-check paid users
     const userIds = sortedData.map(u => u.id);
     const paidUserIds = new Set();
     if (userIds.length > 0) {
@@ -200,31 +172,30 @@ router.get('/search', async (req, res) => {
       const ownerIsPaid = paidUserIds.has(u.id);
       const isViewer = viewerId === u.id;
 
-      // Photo blur logic
+      // PHOTO BLUR — consistent with profile view
       let shouldBlur = false;
       if (!isViewer) {
-        if (ownerIsPaid && !viewerPerms.can_view_paid_profiles) {
-          shouldBlur = true;
-        } else if (u.photo_privacy === 'private') {
-          shouldBlur = true;
-        } else if (u.photo_privacy === 'matches' && !viewerPerms.can_view_paid_profiles) {
-          shouldBlur = true;
-        }
+        if (ownerIsPaid && !canViewPaid) shouldBlur = true;
+        else if (u.photo_privacy === 'private') shouldBlur = true;
+        else if (u.photo_privacy === 'matches' && !canViewPaid) shouldBlur = true;
       }
 
-      // Contact visibility: owner's public wins
-      let showContact = false;
-      if (isViewer) showContact = true;
-      else if (u.contact_privacy === 'public') showContact = true;
-      else if (viewerPerms.contact_access) showContact = true;
+      // CONTACT — expose flags instead of hiding completely
+      let contactMasked = false;
+      if (!isViewer) {
+        if (u.contact_privacy === 'private') contactMasked = true;
+        else if (u.contact_privacy === 'matches' && !hasContactAccess) contactMasked = true;
+        else if (!hasContactAccess && u.contact_privacy !== 'public') contactMasked = true;
+      }
 
       const { _finalAge, ...rest } = u;
 
       return {
         ...rest,
         age: _finalAge,
-        mobile: showContact ? u.mobile : null,
-        email: showContact ? u.email : null,
+        mobile: contactMasked ? null : u.mobile,
+        email: contactMasked ? null : u.email,
+        contact_masked: contactMasked,
         is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
         owner_is_paid: ownerIsPaid,
         should_blur_photo: shouldBlur,
@@ -239,7 +210,7 @@ router.get('/search', async (req, res) => {
 });
 
 // ============================================
-// 2. GET SINGLE PROFILE (with age-from-DOB + paid lock + privacy)
+// 2. GET SINGLE PROFILE
 // ============================================
 router.get('/:userId', async (req, res) => {
   const { userId } = req.params;
@@ -247,11 +218,7 @@ router.get('/:userId', async (req, res) => {
 
   try {
     const { data: profile, error } = await supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
-
+      .from('users').select('*').eq('id', userId).single();
     if (error) throw error;
 
     const isOwner = viewerId === userId;
@@ -269,20 +236,16 @@ router.get('/:userId', async (req, res) => {
 
     const now = new Date();
     const isBoosted = profile.boost_expires_at ? new Date(profile.boost_expires_at) > now : false;
-
-    // Compute age from DOB if missing
     const finalAge = profile.age && profile.age > 0 ? profile.age : computeAgeFromDob(profile.dob);
     profile.age = finalAge;
 
     if (isOwner) {
       return res.json({
         profile: { ...profile, is_boosted: isBoosted, owner_is_paid: ownerIsPaid },
-        isMatch: false,
-        isOwner
+        isMatch: false, isOwner
       });
     }
 
-    // Check owner's visibility
     const visibility = profile.profile_visibility || 'everyone';
     let allowedToSee = true;
     if (visibility === 'paid' && !viewerIsPaid) allowedToSee = false;
@@ -292,32 +255,27 @@ router.get('/:userId', async (req, res) => {
     if (!allowedToSee) {
       return res.json({
         profile: {
-          id: profile.id,
-          name: profile.name,
-          age: finalAge,
-          location: profile.location,
-          gender: profile.gender,
-          is_verified: profile.is_verified,
-          is_boosted: isBoosted,
-          owner_is_paid: ownerIsPaid,
-          hidden_by_owner: true,
+          id: profile.id, name: profile.name, age: finalAge,
+          location: profile.location, gender: profile.gender,
+          is_verified: profile.is_verified, is_boosted: isBoosted,
+          owner_is_paid: ownerIsPaid, hidden_by_owner: true,
         },
-        isMatch: false,
-        isOwner: false,
-        hidden: true,
+        isMatch: false, isOwner: false, hidden: true,
       });
     }
 
     let maskedProfile = { ...profile };
     let lockedByPaidMember = false;
+    let contactMasked = false;
 
-    // Contact visibility: owner's public wins
+    // Contact visibility
     let showContact = false;
     if (profile.contact_privacy === 'public') showContact = true;
     else if (profile.contact_privacy === 'matches' && hasInteracted) showContact = true;
     else if (viewerPerms.contact_access && profile.contact_privacy !== 'private') showContact = true;
 
     if (!showContact) {
+      contactMasked = true;
       maskedProfile.mobile = null;
       maskedProfile.email = null;
     }
@@ -332,6 +290,7 @@ router.get('/:userId', async (req, res) => {
       maskedProfile.income = null;
       maskedProfile.mobile = null;
       maskedProfile.email = null;
+      contactMasked = true;
     } else {
       if (!viewerPerms.see_dob) maskedProfile.dob = null;
       if (!viewerPerms.see_horoscope) {
@@ -342,12 +301,10 @@ router.get('/:userId', async (req, res) => {
       if (!viewerPerms.see_income) maskedProfile.income = null;
     }
 
-    // Photo blur logic
     let shouldBlur = false;
     if (lockedByPaidMember) shouldBlur = true;
     else if (profile.photo_privacy === 'private') shouldBlur = true;
     else if (profile.photo_privacy === 'matches' && !hasInteracted) shouldBlur = true;
-    else if (!viewerPerms.see_full_photo && !hasApproval) shouldBlur = true;
 
     if (hasApproval) shouldBlur = false;
 
@@ -357,6 +314,7 @@ router.get('/:userId', async (req, res) => {
     maskedProfile.viewer_has_approval = hasApproval;
     maskedProfile.owner_is_paid = ownerIsPaid;
     maskedProfile.locked_by_paid_member = lockedByPaidMember;
+    maskedProfile.contact_masked = contactMasked;
 
     res.json({ profile: maskedProfile, isMatch: hasInteracted, isOwner: false });
   } catch (err) {
@@ -392,34 +350,25 @@ router.put('/:userId', async (req, res) => {
   safeUpdates.updated_at = new Date().toISOString();
 
   try {
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .update(safeUpdates)
-      .eq('id', userId)
-      .select()
-      .single();
+    const { data, error } = await supabaseAdmin.from('users').update(safeUpdates).eq('id', userId).select().single();
     if (error) throw error;
     res.json({ profile: data });
   } catch (err) {
-    console.error("Profile update error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ============================================
-// 4. SMART RECOMMENDATIONS (strict same community)
+// 4. SMART RECOMMENDATIONS
 // ============================================
 router.get('/recommendations/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
-    const { data: me, error: meError } = await supabaseAdmin
-      .from('users').select('*').eq('id', userId).single();
+    const { data: me, error: meError } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
     if (meError) throw meError;
 
-    const { data: sentInterests } = await supabaseAdmin
-      .from('interests').select('receiver_id').eq('sender_id', userId);
-    const { data: shortlisted } = await supabaseAdmin
-      .from('interests').select('shortlisted_user_id').eq('user_id', userId);
+    const { data: sentInterests } = await supabaseAdmin.from('interests').select('receiver_id').eq('sender_id', userId);
+    const { data: shortlisted } = await supabaseAdmin.from('interests').select('shortlisted_user_id').eq('user_id', userId);
 
     const excludeIds = new Set([
       userId,
@@ -428,12 +377,8 @@ router.get('/recommendations/:userId', async (req, res) => {
     ]);
 
     const oppositeGender = me.gender === 'male' ? 'female' : 'male';
-    let query = supabaseAdmin
-      .from('users').select('*')
-      .eq('gender', oppositeGender)
-      .eq('is_suspended', false)
-      .neq('id', userId)
-      .limit(100);
+    let query = supabaseAdmin.from('users').select('*')
+      .eq('gender', oppositeGender).eq('is_suspended', false).neq('id', userId).limit(100);
 
     const targetCommunity = me.community || me.pref_community;
     if (targetCommunity) query = query.eq('community', targetCommunity);
@@ -460,18 +405,13 @@ router.get('/recommendations/:userId', async (req, res) => {
       .slice(0, 6);
 
     res.json({ recommendations: scored });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 5. ADMIN STATS
-// ============================================
+// ADMIN ROUTES (unchanged)
 router.get('/admin/stats', async (req, res) => {
   try {
-    const { data: users, error } = await supabaseAdmin
-      .from('users').select('gender, is_verified, is_suspended, boost_expires_at');
+    const { data: users, error } = await supabaseAdmin.from('users').select('gender, is_verified, is_suspended, boost_expires_at');
     if (error) throw error;
     const now = new Date();
     res.json({
@@ -486,9 +426,6 @@ router.get('/admin/stats', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 6. ADMIN: GET ALL USERS
-// ============================================
 router.get('/admin/users', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
@@ -498,9 +435,6 @@ router.get('/admin/users', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 7. ADMIN: GET USER DETAILS
-// ============================================
 router.get('/admin/users/:id/details', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', req.params.id).single();
@@ -509,9 +443,6 @@ router.get('/admin/users/:id/details', async (req, res) => {
   } catch { res.status(404).json({ error: "User not found" }); }
 });
 
-// ============================================
-// 8. ADMIN: VERIFY USER
-// ============================================
 router.patch('/admin/users/:id/verify', async (req, res) => {
   try {
     const { is_verified } = req.body;
@@ -521,9 +452,6 @@ router.patch('/admin/users/:id/verify', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 9. ADMIN: SUSPEND USER
-// ============================================
 router.patch('/admin/users/:id/suspend', async (req, res) => {
   try {
     const { reason } = req.body;
@@ -533,9 +461,6 @@ router.patch('/admin/users/:id/suspend', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 10. ADMIN: UNSUSPEND USER
-// ============================================
 router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('users').update({ is_suspended: false, suspend_reason: null }).eq('id', req.params.id).select().single();
@@ -544,9 +469,6 @@ router.patch('/admin/users/:id/unsuspend', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 11. ADMIN: CHANGE ROLE
-// ============================================
 router.patch('/admin/users/:id/role', async (req, res) => {
   try {
     const { role } = req.body;
@@ -556,9 +478,6 @@ router.patch('/admin/users/:id/role', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================
-// 12. ADMIN: DELETE USER
-// ============================================
 router.delete('/admin/users/:id', async (req, res) => {
   try {
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
