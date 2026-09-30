@@ -125,7 +125,7 @@ function computeAgeFromDob(dob) {
 }
 
 // ============================================
-// 1. SEARCH
+// 1. SEARCH PROFILES
 // ============================================
 router.get('/search', async (req, res) => {
   try {
@@ -194,11 +194,12 @@ router.get('/search', async (req, res) => {
     const maskedData = sortedData.slice(0, 50).map(u => {
       const ownerIsPaid = paidUserIds.has(u.id);
       const isViewer = viewerId === u.id;
+      const freeViewingPaid = ownerIsPaid && !canViewPaid;
 
       // PHOTO BLUR
       let shouldBlur = false;
       if (!isViewer) {
-        if (ownerIsPaid && !canViewPaid) shouldBlur = true;
+        if (freeViewingPaid) shouldBlur = true;
         else if (u.photo_privacy === 'private') shouldBlur = true;
         else if (u.photo_privacy === 'matches' && !canViewPaid) shouldBlur = true;
       }
@@ -208,22 +209,19 @@ router.get('/search', async (req, res) => {
       let contactLockedReason = null;
 
       if (!isViewer) {
-        if (u.contact_privacy === 'public') {
-          contactMasked = false;
+        if (freeViewingPaid) {
+          // Free viewer + paid owner → always locked, must upgrade
+          contactMasked = true;
+          contactLockedReason = "plan_upgrade";
         } else if (u.contact_privacy === 'private') {
           contactMasked = true;
-          contactLockedReason = 'owner_privacy';
+          contactLockedReason = "owner_privacy";
         } else if (u.contact_privacy === 'matches') {
-          // matches setting - show if paid viewer with contact_access, else lock
-          if (hasContactAccess && canViewPaid) {
-            contactMasked = false;
-          } else {
+          if (hasContactAccess && canViewPaid) contactMasked = false;
+          else {
             contactMasked = true;
-            contactLockedReason = 'owner_privacy';
+            contactLockedReason = "owner_privacy";
           }
-        } else if (ownerIsPaid && !canViewPaid) {
-          contactMasked = true;
-          contactLockedReason = 'plan_upgrade';
         }
       }
 
@@ -266,8 +264,18 @@ router.get('/:userId', async (req, res) => {
     const viewerPerms = isOwner ? {} : await getViewerPermissions(viewerId);
     const viewerIsPaid = isOwner ? false : await isPaidUser(viewerId);
     const ownerIsPaid = await isPaidUser(userId);
-    const hasApproval = viewerId ? await hasPhotoApproval(viewerId, userId) : false;
-    const hasContactApproved = viewerId ? await hasContactApproval(viewerId, userId) : false;
+
+    const canViewPaidProfiles = viewerPerms.can_view_paid_profiles === true;
+    const freeViewingPaid = !isOwner && ownerIsPaid && !canViewPaidProfiles;
+
+    // Photo approval only counts if viewer is allowed to see paid members
+    const rawPhotoApproval = viewerId ? await hasPhotoApproval(viewerId, userId) : false;
+    const hasApproval = rawPhotoApproval && !freeViewingPaid;
+
+    // Contact approval only counts if viewer is allowed to see paid members
+    const rawContactApproval = viewerId ? await hasContactApproval(viewerId, userId) : false;
+    const hasContactApproved = rawContactApproval && !freeViewingPaid;
+
     const contactRequestStatus = viewerId ? await getContactRequestStatus(viewerId, userId) : 'none';
 
     let viewerVerified = false;
@@ -313,40 +321,46 @@ router.get('/:userId', async (req, res) => {
 
     // CONTACT logic
     let showContact = false;
-    if (profile.contact_privacy === 'public') showContact = true;
-    else if (profile.contact_privacy === 'matches' && hasInteracted) showContact = true;
-    else if (viewerPerms.contact_access && profile.contact_privacy !== 'private' && viewerIsPaid) showContact = true;
-    if (hasContactApproved) showContact = true;
+
+    if (freeViewingPaid) {
+      // Free viewer + paid owner → always locked
+      showContact = false;
+      contactLockedReason = "plan_upgrade";
+    } else if (profile.contact_privacy === 'public') {
+      showContact = true;
+    } else if (profile.contact_privacy === 'matches' && hasInteracted) {
+      showContact = true;
+    } else if (viewerPerms.contact_access && profile.contact_privacy !== 'private' && viewerIsPaid) {
+      showContact = true;
+    }
+
+    if (!freeViewingPaid && hasContactApproved) showContact = true;
 
     if (!showContact) {
       contactMasked = true;
-      // Distinguish reason
-      if (profile.contact_privacy === 'private' || profile.contact_privacy === 'matches') {
-        contactLockedReason = 'owner_privacy';
-      } else if (ownerIsPaid && !viewerPerms.can_view_paid_profiles) {
-        contactLockedReason = 'plan_upgrade';
-      } else {
-        contactLockedReason = 'plan_upgrade';
+      if (!contactLockedReason) {
+        if (profile.contact_privacy === 'private' || profile.contact_privacy === 'matches') {
+          contactLockedReason = "owner_privacy";
+        } else {
+          contactLockedReason = "plan_upgrade";
+        }
       }
       maskedProfile.mobile = null;
       maskedProfile.email = null;
     }
 
     // Paid member lock
-    if (ownerIsPaid && !viewerPerms.can_view_paid_profiles && !hasApproval) {
+    if (freeViewingPaid) {
       lockedByPaidMember = true;
       maskedProfile.dob = null;
       maskedProfile.rasi = null;
       maskedProfile.nakshatra = null;
       maskedProfile.gothram = null;
       maskedProfile.income = null;
-      // Don't override contact if request approved
-      if (!hasContactApproved) {
-        maskedProfile.mobile = null;
-        maskedProfile.email = null;
-        contactMasked = true;
-        if (!contactLockedReason) contactLockedReason = 'plan_upgrade';
-      }
+      maskedProfile.mobile = null;
+      maskedProfile.email = null;
+      contactMasked = true;
+      contactLockedReason = "plan_upgrade";
     } else {
       if (!viewerPerms.see_dob) maskedProfile.dob = null;
       if (!viewerPerms.see_horoscope) {
@@ -357,12 +371,13 @@ router.get('/:userId', async (req, res) => {
       if (!viewerPerms.see_income) maskedProfile.income = null;
     }
 
+    // Photo blur
     let shouldBlur = false;
-    if (lockedByPaidMember) shouldBlur = true;
+    if (freeViewingPaid) shouldBlur = true;
     else if (profile.photo_privacy === 'private') shouldBlur = true;
     else if (profile.photo_privacy === 'matches' && !hasInteracted) shouldBlur = true;
 
-    if (hasApproval) shouldBlur = false;
+    if (!freeViewingPaid && hasApproval) shouldBlur = false;
 
     maskedProfile.should_blur_photos = shouldBlur;
     maskedProfile.is_boosted = isBoosted;
@@ -381,7 +396,9 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
-// 3. UPDATE PROFILE
+// ============================================
+// 3. UPDATE PROFILE (whitelist)
+// ============================================
 router.put('/:userId', async (req, res) => {
   const { userId } = req.params;
   const updates = { ...req.body };
@@ -414,7 +431,9 @@ router.put('/:userId', async (req, res) => {
   }
 });
 
+// ============================================
 // 4. RECOMMENDATIONS
+// ============================================
 router.get('/recommendations/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
@@ -462,7 +481,9 @@ router.get('/recommendations/:userId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ADMIN ROUTES
+// ============================================
+// 5. ADMIN ROUTES
+// ============================================
 router.get('/admin/stats', async (req, res) => {
   try {
     const { data: users, error } = await supabaseAdmin.from('users').select('gender, is_verified, is_suspended, boost_expires_at');
@@ -531,7 +552,6 @@ router.patch('/admin/users/:id/role', async (req, res) => {
     res.json({ user: data });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
 router.delete('/admin/users/:id', async (req, res) => {
   try {
     const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
