@@ -99,25 +99,44 @@ async function hasPhotoApproval(requesterId, ownerId) {
 
 
 // ============================================
-// 1. SEARCH PROFILES (with privacy + paid member lock)
+// 1. SEARCH PROFILES (with community default + paid lock)
 // ============================================
 router.get('/search', async (req, res) => {
   try {
-    const { gender, age_min, age_max, location, community, religion, viewerId } = req.query;
+    const {
+      gender, age_min, age_max, location, community, religion,
+      viewerId, allCommunities
+    } = req.query;
+
     let query = supabaseAdmin.from('users').select('*');
 
     if (gender) query = query.eq('gender', gender);
     if (age_min) query = query.gte('age', parseInt(age_min));
     if (age_max) query = query.lte('age', parseInt(age_max));
     if (location) query = query.ilike('location', `%${location}%`);
-    if (community) query = query.eq('community', community);
     if (religion) query = query.eq('religion', religion);
+
+    // Community resolution:
+    // 1. If user explicitly picked a community → use it
+    // 2. Else, if allCommunities=true → show all
+    // 3. Else if viewerId provided → default to viewer's community
+    if (community) {
+      query = query.eq('community', community);
+    } else if (allCommunities !== 'true' && viewerId) {
+      const { data: viewer } = await supabaseAdmin
+        .from('users')
+        .select('community')
+        .eq('id', viewerId)
+        .single();
+      if (viewer?.community) {
+        query = query.eq('community', viewer.community);
+      }
+    }
 
     const { data, error } = await query.limit(50);
     if (error) throw error;
 
     const viewerPerms = viewerId ? await getViewerPermissions(viewerId) : {};
-
     const now = new Date();
 
     const sortedData = (data || []).sort((a, b) => {
@@ -130,7 +149,7 @@ router.get('/search', async (req, res) => {
       return 0;
     });
 
-    // Check each user's paid status (batch)
+    // Batch-check paid users
     const userIds = sortedData.map(u => u.id);
     const paidUserIds = new Set();
     if (userIds.length > 0) {
@@ -141,7 +160,6 @@ router.get('/search', async (req, res) => {
         .eq('status', 'active')
         .gte('expires_at', new Date().toISOString())
         .in('plan', ['Gold', 'Platinum', 'gold', 'platinum']);
-
       (subs || []).forEach(s => paidUserIds.add(s.user_id));
     }
 
@@ -149,14 +167,14 @@ router.get('/search', async (req, res) => {
       const ownerIsPaid = paidUserIds.has(u.id);
       const isViewer = viewerId === u.id;
 
-      // Determine if this profile should be blurred for the viewer
+      // Free user viewing Paid member → blur (unless has can_view_paid_profiles)
       let shouldBlur = false;
       if (!isViewer) {
         if (ownerIsPaid && !viewerPerms.can_view_paid_profiles) {
           shouldBlur = true;
         } else if (u.photo_privacy === 'private') {
           shouldBlur = true;
-        } else if (u.photo_privacy === 'matches' && !viewerPerms.can_view_paid_profiles && ownerIsPaid) {
+        } else if (u.photo_privacy === 'matches' && !viewerPerms.can_view_paid_profiles) {
           shouldBlur = true;
         }
       }
