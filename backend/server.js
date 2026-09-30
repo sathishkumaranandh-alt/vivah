@@ -19,6 +19,7 @@ import formConfigRoutes from './routes/formConfig.js';
 import successStoriesRoutes from './routes/successStories.js';
 import boostRoutes from './routes/boost.js';
 import photoRequestsRoutes from './routes/photoRequests.js';
+import contactRequestsRoutes from './routes/contactRequests.js';
 import premiumRoutes from './routes/premium.js';
 import plansRoutes from './routes/plans.js';
 
@@ -44,6 +45,7 @@ app.use('/visitors', visitorsRoutes);
 app.use('/form-config', formConfigRoutes);
 app.use('/success-stories', successStoriesRoutes);
 app.use('/photo-requests', photoRequestsRoutes);
+app.use('/contact-requests', contactRequestsRoutes);
 app.use('/user-permissions', userPermissionsRoutes);
 app.use('/boost', boostRoutes);
 app.use('/premium', premiumRoutes);
