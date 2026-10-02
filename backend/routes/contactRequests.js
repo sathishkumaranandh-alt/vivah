@@ -23,13 +23,29 @@ router.post('/request', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+
+    // Notify owner
+    try {
+      const { data: requester } = await supabaseAdmin
+        .from('users').select('name').eq('id', requester_id).single();
+
+      await supabaseAdmin.from('notifications').insert({
+        user_id: owner_id,
+        title: '📞 New Contact Request',
+        message: `${requester?.name || "Someone"} wants to view your contact info. Tap to approve or deny.`,
+        is_read: false,
+      });
+    } catch (notifErr) {
+      console.error("Notification error:", notifErr);
+    }
+
     res.json({ request: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET incoming requests (for owner)
+// INCOMING
 router.get('/incoming/:ownerId', async (req, res) => {
   const { ownerId } = req.params;
   try {
@@ -58,7 +74,7 @@ router.get('/incoming/:ownerId', async (req, res) => {
   }
 });
 
-// RESPOND approve/deny
+// RESPOND
 router.put('/respond/:id', async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -70,13 +86,31 @@ router.put('/respond/:id', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+
+    // Notify requester
+    try {
+      const { data: owner } = await supabaseAdmin
+        .from('users').select('name').eq('id', data.owner_id).single();
+
+      await supabaseAdmin.from('notifications').insert({
+        user_id: data.requester_id,
+        title: status === 'approved' ? '✅ Contact Access Approved' : '❌ Contact Request Denied',
+        message: status === 'approved'
+          ? `${owner?.name || "User"} approved your contact request.`
+          : `${owner?.name || "User"} denied your contact request.`,
+        is_read: false,
+      });
+    } catch (notifErr) {
+      console.error("Notification error:", notifErr);
+    }
+
     res.json({ request: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// CHECK status for a specific pair
+// STATUS
 router.get('/status/:requesterId/:ownerId', async (req, res) => {
   const { requesterId, ownerId } = req.params;
   try {
