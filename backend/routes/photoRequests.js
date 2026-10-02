@@ -10,7 +10,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// REQUEST to view photos
+// REQUEST photo access
 router.post('/request', async (req, res) => {
   const { requester_id, owner_id } = req.body;
   if (!requester_id || !owner_id) return res.status(400).json({ error: "Missing IDs" });
@@ -23,13 +23,29 @@ router.post('/request', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+
+    // Notify owner
+    try {
+      const { data: requester } = await supabaseAdmin
+        .from('users').select('name').eq('id', requester_id).single();
+
+      await supabaseAdmin.from('notifications').insert({
+        user_id: owner_id,
+        title: '📩 New Photo Request',
+        message: `${requester?.name || "Someone"} wants to view your photos. Tap to approve or deny.`,
+        is_read: false,
+      });
+    } catch (notifErr) {
+      console.error("Notification error:", notifErr);
+    }
+
     res.json({ request: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET incoming requests (owner's view)
+// INCOMING requests for owner
 router.get('/incoming/:ownerId', async (req, res) => {
   const { ownerId } = req.params;
   try {
@@ -41,7 +57,6 @@ router.get('/incoming/:ownerId', async (req, res) => {
       .order('created_at', { ascending: false });
     if (error) throw error;
 
-    // Get requester details
     const ids = (data || []).map(r => r.requester_id);
     const { data: users } = await supabaseAdmin
       .from('users')
@@ -59,11 +74,10 @@ router.get('/incoming/:ownerId', async (req, res) => {
   }
 });
 
-// RESPOND to a request (approve/deny)
+// RESPOND approve/deny
 router.put('/respond/:id', async (req, res) => {
   const { id } = req.params;
-  const { status } = req.body; // 'approved' or 'denied'
-
+  const { status } = req.body;
   try {
     const { data, error } = await supabaseAdmin
       .from('photo_requests')
@@ -72,13 +86,31 @@ router.put('/respond/:id', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+
+    // Notify requester
+    try {
+      const { data: owner } = await supabaseAdmin
+        .from('users').select('name').eq('id', data.owner_id).single();
+
+      await supabaseAdmin.from('notifications').insert({
+        user_id: data.requester_id,
+        title: status === 'approved' ? '✅ Photo Access Approved' : '❌ Photo Request Denied',
+        message: status === 'approved'
+          ? `${owner?.name || "User"} approved your photo request.`
+          : `${owner?.name || "User"} denied your photo request.`,
+        is_read: false,
+      });
+    } catch (notifErr) {
+      console.error("Notification error:", notifErr);
+    }
+
     res.json({ request: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// CHECK request status (from requester's view)
+// STATUS check
 router.get('/status/:requesterId/:ownerId', async (req, res) => {
   const { requesterId, ownerId } = req.params;
   try {
