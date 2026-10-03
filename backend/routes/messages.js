@@ -1,6 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
-import { sendTelegram } from "../services/telegram.js";
+import { sendTelegram } from '../utils/telegram.js';
 
 const router = express.Router();
 
