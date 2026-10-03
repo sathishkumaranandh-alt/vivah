@@ -22,6 +22,7 @@ import photoRequestsRoutes from './routes/photoRequests.js';
 import contactRequestsRoutes from './routes/contactRequests.js';
 import premiumRoutes from './routes/premium.js';
 import plansRoutes from './routes/plans.js';
+import telegramRoutes from './routes/telegram.js';
 
 dotenv.config();
 const app = express();
@@ -50,6 +51,7 @@ app.use('/user-permissions', userPermissionsRoutes);
 app.use('/boost', boostRoutes);
 app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
+app.use('/telegram', telegramRoutes);
 
 // Settings routes (part of audit.js)
 app.use('/', auditRoutes);
