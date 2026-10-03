@@ -16,7 +16,6 @@ const supabaseAdmin = createClient(
 // ============================================
 async function canSeeVisitors(userId) {
   try {
-    // Get active subscription
     const { data: sub } = await supabaseAdmin
       .from('subscriptions')
       .select('plan, status, expires_at')
@@ -29,7 +28,6 @@ async function canSeeVisitors(userId) {
 
     const planName = sub?.plan || 'Free';
 
-    // Get plan permissions
     const { data: planData } = await supabaseAdmin
       .from('membership_plans')
       .select('permissions')
@@ -49,11 +47,17 @@ async function canSeeVisitors(userId) {
 // LOG A PROFILE VIEW + Notify (paid only)
 // ============================================
 router.post('/log', async (req, res) => {
-  console.log("DEBUG - Received body:", req.body); // <--- DEBUG LINE ADDED HERE
-  
+  console.log("--- STARTING VISITOR NOTIFICATION ---");
   const { viewerId, viewedId } = req.body;
-  if (!viewerId || !viewedId) return res.status(400).json({ error: "Missing IDs" });
-  if (viewerId === viewedId) return res.json({ message: "Self view ignored" });
+  
+  if (!viewerId || !viewedId) {
+    console.log("Missing IDs in request body");
+    return res.status(400).json({ error: "Missing IDs" });
+  }
+  if (viewerId === viewedId) {
+    console.log("Self view ignored");
+    return res.json({ message: "Self view ignored" });
+  }
 
   try {
     // 1. Log the view
@@ -61,12 +65,15 @@ router.post('/log', async (req, res) => {
       viewer_id: viewerId,
       viewed_id: viewedId
     });
+    console.log("Profile view logged for viewedId:", viewedId);
 
     // 2. Check if owner has see_visitors permission
     const ownerCanSee = await canSeeVisitors(viewedId);
+    console.log("Owner can see visitors?", ownerCanSee);
+    
     if (!ownerCanSee) {
-      // Free user → no notification (matches website rule)
-      return res.json({ success: true, notified: false });
+      console.log("Owner is not a paid member. No Telegram sent.");
+      return res.json({ success: true, notified: false, reason: "Not a paid member" });
     }
 
     // 3. Check if owner has Telegram enabled
@@ -76,17 +83,32 @@ router.post('/log', async (req, res) => {
       .eq('id', viewedId)
       .single();
 
+    console.log("Owner Telegram Opt-in:", owner?.telegram_opt_in);
+    console.log("Owner Telegram Chat ID:", owner?.telegram_chat_id);
+
     if (owner?.telegram_opt_in && owner?.telegram_chat_id) {
-      // No name, no details — just a generic ping
-      await sendTelegram(
+      const tgResult = await sendTelegram(
         owner.telegram_chat_id,
         `👀 <b>Profile View</b>\n\nSomeone just viewed your profile.\n\nTap to see who → https://vivaha-frontend.vercel.app/visitors`
       );
+      
+      console.log("TELEGRAM API RESULT:", tgResult);
+      console.log("--- END VISITOR NOTIFICATION ---");
+      
+      return res.json({ 
+        success: true, 
+        notified: true, 
+        telegram_response: tgResult 
+      });
     }
 
-    res.json({ success: true, notified: true });
+    console.log("Owner does not have Telegram linked or opted-in.");
+    console.log("--- END VISITOR NOTIFICATION ---");
+    res.json({ success: true, notified: false, reason: "Telegram not linked" });
+
   } catch (err) {
     console.error("View log error:", err);
+    console.log("--- END VISITOR NOTIFICATION ---");
     res.status(500).json({ error: err.message });
   }
 });
@@ -107,7 +129,6 @@ router.get('/list/:userId', async (req, res) => {
     if (viewError) throw viewError;
     if (!views || views.length === 0) return res.json({ visitors: [] });
 
-    // Deduplicate — keep only most recent view per viewer
     const uniqueViews = [];
     const seenViewers = new Set();
     for (const view of views) {
