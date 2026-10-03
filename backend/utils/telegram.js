@@ -2,6 +2,9 @@ import axios from 'axios';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
+// Debug log to verify token loading in Render
+console.log("TELEGRAM TOKEN LOADED:", BOT_TOKEN ? "Yes (length: " + BOT_TOKEN.length + ")" : "No");
+
 export async function sendTelegram(chatId, text) {
   if (!BOT_TOKEN) {
     console.error("TELEGRAM_BOT_TOKEN not set");
@@ -45,4 +48,4 @@ export async function sendTelegramWithButtons(chatId, text, buttons) {
     console.error("Telegram send error:", err.response?.data || err.message);
     return null;
   }
-      }
+  }
