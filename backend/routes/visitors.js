@@ -1,7 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { sendTelegram } from '../services/telegram.js';
+import { sendTelegram } from '../utils/telegram.js';
 
 dotenv.config();
 const router = express.Router();
