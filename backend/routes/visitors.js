@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { sendTelegram } from '../services/telegram.js';
 
 dotenv.config();
 const router = express.Router();
@@ -10,29 +11,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// LOG A PROFILE VIEW
-router.post('/log', async (req, res) => {
-  const { viewerId, viewedId } = req.body;
-  if (!viewerId || !viewedId) return res.status(400).json({ error: "Missing IDs" });
-  if (viewerId === viewedId) return res.json({ message: "Self view ignored" });
-
+// ============================================
+// HELPER: Check if a user's plan has see_visitors permission
+// ============================================
+async function canSeeVisitors(userId) {
   try {
-    await supabaseAdmin.from('profile_views').insert({
-      viewer_id: viewerId,
-      viewed_id: viewedId
-    });
-    res.json({ success: true });
-  } catch (err) {
-    console.error("View log error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET VISITORS FOR A USER (PREMIUM ONLY)
-router.get('/list/:userId', async (req, res) => {
-  const { userId } = req.params;
-  try {
-    // 1. Check if the user has an active Gold or Platinum subscription
+    // Get active subscription
     const { data: sub } = await supabaseAdmin
       .from('subscriptions')
       .select('plan, status, expires_at')
@@ -43,17 +27,74 @@ router.get('/list/:userId', async (req, res) => {
       .limit(1)
       .single();
 
-    const isPremium = sub && (sub.plan === 'gold' || sub.plan === 'platinum');
+    const planName = sub?.plan || 'Free';
 
-    if (!isPremium) {
-      return res.json({ 
-        visitors: [], 
-        isPremium: false, 
-        message: "Upgrade to Gold or Platinum to see who viewed your profile" 
-      });
+    // Get plan permissions
+    const { data: planData } = await supabaseAdmin
+      .from('membership_plans')
+      .select('permissions')
+      .ilike('name', planName)
+      .eq('is_active', true)
+      .single();
+
+    const perms = planData?.permissions || {};
+    const val = perms.see_visitors;
+    return val === true || val === "true";
+  } catch {
+    return false;
+  }
+}
+
+// ============================================
+// LOG A PROFILE VIEW + Notify (paid only)
+// ============================================
+router.post('/log', async (req, res) => {
+  const { viewerId, viewedId } = req.body;
+  if (!viewerId || !viewedId) return res.status(400).json({ error: "Missing IDs" });
+  if (viewerId === viewedId) return res.json({ message: "Self view ignored" });
+
+  try {
+    // 1. Log the view
+    await supabaseAdmin.from('profile_views').insert({
+      viewer_id: viewerId,
+      viewed_id: viewedId
+    });
+
+    // 2. Check if owner has see_visitors permission
+    const ownerCanSee = await canSeeVisitors(viewedId);
+    if (!ownerCanSee) {
+      // Free user → no notification (matches website rule)
+      return res.json({ success: true, notified: false });
     }
 
-    // 2. Fetch visitors
+    // 3. Check if owner has Telegram enabled
+    const { data: owner } = await supabaseAdmin
+      .from('users')
+      .select('telegram_chat_id, telegram_opt_in')
+      .eq('id', viewedId)
+      .single();
+
+    if (owner?.telegram_opt_in && owner?.telegram_chat_id) {
+      // No name, no details — just a generic ping
+      await sendTelegram(
+        owner.telegram_chat_id,
+        `👀 <b>Profile View</b>\n\nSomeone just viewed your profile.\n\nTap to see who → https://vivaha-frontend-77l38brgf-sathishkumaranandh-6756.vercel.app/visitors`
+      );
+    }
+
+    res.json({ success: true, notified: true });
+  } catch (err) {
+    console.error("View log error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// GET VISITORS FOR A USER (existing logic)
+// ============================================
+router.get('/list/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
     const { data: views, error: viewError } = await supabaseAdmin
       .from('profile_views')
       .select('viewer_id, created_at')
@@ -62,9 +103,9 @@ router.get('/list/:userId', async (req, res) => {
       .limit(100);
 
     if (viewError) throw viewError;
-    if (!views || views.length === 0) return res.json({ visitors: [], isPremium: true });
+    if (!views || views.length === 0) return res.json({ visitors: [] });
 
-    // 3. Deduplicate
+    // Deduplicate — keep only most recent view per viewer
     const uniqueViews = [];
     const seenViewers = new Set();
     for (const view of views) {
@@ -88,7 +129,7 @@ router.get('/list/:userId', async (req, res) => {
       return { ...user, viewed_at: view.created_at };
     }).filter(v => v.id);
 
-    res.json({ visitors, isPremium: true });
+    res.json({ visitors });
   } catch (err) {
     console.error("Visitors list error:", err);
     res.status(500).json({ error: err.message });
