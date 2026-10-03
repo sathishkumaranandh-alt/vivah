@@ -38,7 +38,7 @@ router.post('/signup', async (req, res) => {
     if (authError) throw authError;
     const userId = authData.user.id;
 
-    // 2. Save the full profile to the users table (RESTORED ALL FIELDS)
+    // 2. Save the full profile to the users table
     const { error: dbError } = await supabaseAdmin
       .from('users')
       .upsert([{
@@ -91,12 +91,14 @@ router.post('/signup', async (req, res) => {
     // ==========================================
     console.log("--- STARTING TELEGRAM MATCH ---");
     const newUserAge = calculateAge(data.dob);
-    console.log("New user age:", newUserAge, "| Community:", data.community);
+    const newUserGender = data.gender?.toLowerCase(); // 'male' or 'female'
+    
+    console.log("New user age:", newUserAge, "| Gender:", newUserGender, "| Community:", data.community);
 
-    // Fetch all users who have Telegram enabled
+    // Fetch all users who have Telegram enabled (ADDED: gender to select)
     const { data: paidUsers, error: paidError } = await supabaseAdmin
       .from('users')
-      .select(`id, name, telegram_chat_id, pref_age_min, pref_age_max, pref_community`)
+      .select(`id, name, gender, telegram_chat_id, pref_age_min, pref_age_max, pref_community`)
       .not('telegram_chat_id', 'is', null)
       .eq('telegram_opt_in', true);
 
@@ -126,16 +128,27 @@ router.post('/signup', async (req, res) => {
         // 2. Must not be the new user themselves
         if (paidUser.id === userId) return false;
 
-        // 3. Age match
+        // 3. Gender match (Opposite Gender Logic)
+        const paidUserGender = paidUser.gender?.toLowerCase();
+        let genderMatch = false;
+        if (paidUserGender === 'male') {
+          genderMatch = (newUserGender === 'female');
+        } else if (paidUserGender === 'female') {
+          genderMatch = (newUserGender === 'male');
+        } else {
+          genderMatch = true; // Fallback if gender is not set
+        }
+
+        // 4. Age match
         const ageMatch = (!paidUser.pref_age_min || newUserAge >= paidUser.pref_age_min) &&
                          (!paidUser.pref_age_max || newUserAge <= paidUser.pref_age_max);
 
-        // 4. Community match (if they specified a preference)
+        // 5. Community match (if they specified a preference)
         const communityMatch = !paidUser.pref_community || 
                                paidUser.pref_community === data.community ||
                                paidUser.pref_community.toLowerCase() === 'any';
 
-        return ageMatch && communityMatch;
+        return genderMatch && ageMatch && communityMatch;
       });
 
       console.log("Matched users to notify:", matchedPaidUsers.length);
@@ -143,6 +156,8 @@ router.post('/signup', async (req, res) => {
       // Send Telegram message to each matched paid user
       for (const match of matchedPaidUsers) {
         console.log("Sending Telegram to:", match.name, "| Chat ID:", match.telegram_chat_id);
+        
+        // ADDED: Gender to the message
         const msg = `
 🌟 <b>New Match Alert!</b>
 
@@ -150,12 +165,12 @@ A new profile matching your preferences just registered.
 
 <b>Name:</b> ${data.name}
 <b>Age:</b> ${newUserAge || 'Not specified'}
+<b>Gender:</b> ${data.gender ? data.gender.charAt(0).toUpperCase() + data.gender.slice(1) : 'Not specified'}
 <b>Community:</b> ${data.community || 'Not specified'}
 
 <a href="https://vivaha-frontend.vercel.app/profile/${userId}">View Profile</a>
         `;
         
-        // CRITICAL: We use 'await' here to ensure the message sends before the server responds
         await sendTelegram(match.telegram_chat_id, msg);
       }
     } else {
