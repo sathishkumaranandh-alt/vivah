@@ -49,6 +49,8 @@ async function canSeeVisitors(userId) {
 // LOG A PROFILE VIEW + Notify (paid only)
 // ============================================
 router.post('/log', async (req, res) => {
+  console.log("DEBUG - Received body:", req.body); // <--- DEBUG LINE ADDED HERE
+  
   const { viewerId, viewedId } = req.body;
   if (!viewerId || !viewedId) return res.status(400).json({ error: "Missing IDs" });
   if (viewerId === viewedId) return res.json({ message: "Self view ignored" });
