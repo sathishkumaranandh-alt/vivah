@@ -78,7 +78,7 @@ router.post('/log', async (req, res) => {
       // No name, no details — just a generic ping
       await sendTelegram(
         owner.telegram_chat_id,
-        `👀 <b>Profile View</b>\n\nSomeone just viewed your profile.\n\nTap to see who → https://vivaha-frontend-77l38brgf-sathishkumaranandh-6756.vercel.app/visitors`
+        `👀 <b>Profile View</b>\n\nSomeone just viewed your profile.\n\nTap to see who → https://vivaha-frontend.vercel.app/visitors`
       );
     }
 
