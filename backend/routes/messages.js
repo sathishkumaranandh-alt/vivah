@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { sendTelegram } from "../services/telegram.js";
 
 const router = express.Router();
 
@@ -14,7 +15,6 @@ async function areConnected(user1, user2) {
   return !!data;
 }
 
-
 // GET /messages/unread/:userId
 router.get("/unread/:userId", async (req, res) => {
   try {
@@ -28,6 +28,7 @@ router.get("/unread/:userId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // PATCH /messages/mark-read/:userId/:partnerId
 router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
   try {
@@ -157,7 +158,7 @@ router.post("/send", async (req, res) => {
       .select().single();
     if (error) throw error;
 
-    // ⭐ Notify receiver
+    // ⭐ Notify receiver (in-app)
     try {
       const { data: sender } = await supabase
         .from("users").select("name").eq("id", sender_id).single();
@@ -172,6 +173,30 @@ router.post("/send", async (req, res) => {
       }]);
     } catch (e) {
       console.error("Notify error:", e);
+    }
+
+    // ⭐ NEW: Notify receiver via Telegram
+    try {
+      const { data: receiver } = await supabase
+        .from("users")
+        .select("telegram_chat_id, telegram_opt_in")
+        .eq("id", receiver_id)
+        .single();
+
+      const { data: senderInfo } = await supabase
+        .from("users")
+        .select("name")
+        .eq("id", sender_id)
+        .single();
+
+      if (receiver?.telegram_opt_in && receiver?.telegram_chat_id) {
+        await sendTelegram(
+          receiver.telegram_chat_id,
+          `💬 <b>New Message</b>\n\nFrom: <b>${senderInfo?.name || "Someone"}</b>\n\nTap to open Vivaha →`
+        );
+      }
+    } catch (e) {
+      console.error("Telegram notify error:", e);
     }
 
     res.status(201).json({ message: "Message sent", data });
