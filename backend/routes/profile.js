@@ -188,7 +188,21 @@ router.get('/search', async (req, res) => {
         .eq('requester_id', viewerId).eq('status', 'approved').in('owner_id', userIds);
       (ca || []).forEach(a => approvedContactIds.add(a.owner_id));
     }
-
+    // ============================================
+    // NEW: Fetch viewer's interactions (for 'matches' privacy)
+    // ============================================
+    const matchContext = new Set();
+    if (viewerId && userIds.length > 0) {
+      const { data: interactions } = await supabaseAdmin
+        .from('interests')
+        .select('sender_id, receiver_id')
+        .or(`sender_id.eq.${viewerId},receiver_id.eq.${viewerId}`)
+        .in('status', ['pending', 'accepted']);
+      (interactions || []).forEach(i => {
+        const otherId = i.sender_id === viewerId ? i.receiver_id : i.sender_id;
+        if (userIds.includes(otherId)) matchContext.add(otherId);
+      });
+  }
     const maskedData = sortedData.slice(0, 50).map(u => {
       const ownerIsPaid = paidUserIds.has(u.id);
       const isViewer = viewerId === u.id;
@@ -202,7 +216,7 @@ router.get('/search', async (req, res) => {
         else if (hasPhotoApproved) shouldBlur = false;
         else if (canSeeFullPhoto && ownerIsPaid) shouldBlur = false;
         else if (u.photo_privacy === 'private') shouldBlur = true;
-        else if (u.photo_privacy === 'matches') shouldBlur = true;
+                else if (u.photo_privacy === 'matches' && !matchContext.has(u.id)) shouldBlur = true;
       }
 
       let contactMasked = false;
