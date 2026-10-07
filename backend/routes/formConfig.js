@@ -103,7 +103,7 @@ router.get('/core-fields', async (req, res) => {
 router.put('/core-fields/:key', async (req, res) => {
   const { key } = req.params;
   const {
-    is_active, is_required, show_in_profile,
+    is_active, is_required, show_in_profile, show_in_view,
     label, type, options, step, display_order
   } = req.body;
 
@@ -111,6 +111,7 @@ router.put('/core-fields/:key', async (req, res) => {
   if (is_active !== undefined) updates.is_active = is_active;
   if (is_required !== undefined) updates.is_required = is_required;
   if (show_in_profile !== undefined) updates.show_in_profile = show_in_profile;
+  if (show_in_view !== undefined) updates.show_in_view = show_in_view;
   if (label !== undefined) updates.label = label;
   if (type !== undefined) updates.type = type;
   if (options !== undefined) updates.options = options;
