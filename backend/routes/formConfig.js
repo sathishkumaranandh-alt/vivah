@@ -10,11 +10,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// ============================================
-// CUSTOM FIELDS (registration_fields table)
-// ============================================
-
-// GET all fields (Register + Profile Edit)
+// GET custom fields
 router.get('/fields', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -29,7 +25,7 @@ router.get('/fields', async (req, res) => {
   }
 });
 
-// CREATE a new field (Admin only)
+// CREATE custom field
 router.post('/fields', async (req, res) => {
   const {
     field_key, label, type, options, is_required, step,
@@ -58,7 +54,7 @@ router.post('/fields', async (req, res) => {
   }
 });
 
-// UPDATE a field
+// UPDATE custom field
 router.put('/fields/:id', async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
@@ -76,7 +72,7 @@ router.put('/fields/:id', async (req, res) => {
   }
 });
 
-// DELETE a field
+// DELETE custom field
 router.delete('/fields/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -88,14 +84,14 @@ router.delete('/fields/:id', async (req, res) => {
   }
 });
 
-// ============================================
-// CORE FIELDS (core_fields_config table)
-// ============================================
-
 // GET core field configurations
 router.get('/core-fields', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin.from('core_fields_config').select('*');
+    const { data, error } = await supabaseAdmin
+      .from('core_fields_config')
+      .select('*')
+      .order('step', { ascending: true })
+      .order('display_order', { ascending: true });
     if (error) throw error;
     res.json({ fields: data });
   } catch (err) {
@@ -103,15 +99,23 @@ router.get('/core-fields', async (req, res) => {
   }
 });
 
-// UPDATE a core field configuration
+// UPDATE a core field configuration (FULL control: label, type, options, etc.)
 router.put('/core-fields/:key', async (req, res) => {
   const { key } = req.params;
-  const { is_active, is_required, show_in_profile } = req.body;
+  const {
+    is_active, is_required, show_in_profile,
+    label, type, options, step, display_order
+  } = req.body;
 
   const updates = { updated_at: new Date().toISOString() };
   if (is_active !== undefined) updates.is_active = is_active;
   if (is_required !== undefined) updates.is_required = is_required;
   if (show_in_profile !== undefined) updates.show_in_profile = show_in_profile;
+  if (label !== undefined) updates.label = label;
+  if (type !== undefined) updates.type = type;
+  if (options !== undefined) updates.options = options;
+  if (step !== undefined) updates.step = step;
+  if (display_order !== undefined) updates.display_order = display_order;
 
   try {
     const { data, error } = await supabaseAdmin
