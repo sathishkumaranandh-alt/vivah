@@ -26,9 +26,23 @@ async function getUserPlan(userId) {
       .single();
 
     if (!data) return 'free';
-    return data.plan; // 'gold' or 'platinum'
+    return data.plan;
   } catch {
     return 'free';
+  }
+}
+
+// ============================================
+// HELPER: Compute age from DOB
+// ============================================
+function computeAgeFromDob(dob) {
+  if (!dob) return null;
+  try {
+    const birth = new Date(dob);
+    if (isNaN(birth.getTime())) return null;
+    return Math.floor((Date.now() - birth.getTime()) / (1000 * 60 * 60 * 24 * 365.25));
+  } catch {
+    return null;
   }
 }
 
@@ -39,7 +53,6 @@ router.get('/advanced-search', async (req, res) => {
   const {
     viewerId,
     gender, age_min, age_max, location, community, religion,
-    // Premium only:
     education, income, marital_status, food_pref, has_horoscope, verified_only
   } = req.query;
 
@@ -49,7 +62,8 @@ router.get('/advanced-search', async (req, res) => {
 
     // Check if user tried to use premium filters
     const usingPremiumFilters =
-      education || income || marital_status || food_pref || has_horoscope || verified_only === 'true';
+      education || income || marital_status || food_pref ||
+      has_horoscope === 'true' || verified_only === 'true';
 
     if (usingPremiumFilters && !isPremium) {
       return res.status(403).json({
@@ -58,34 +72,59 @@ router.get('/advanced-search', async (req, res) => {
       });
     }
 
-    // Build query
-    let query = supabaseAdmin.from('users').select('*');
+    // ============================================
+    // Build query — case-insensitive matching
+    // ============================================
+    let query = supabaseAdmin.from('users').select('*').eq('is_suspended', false);
 
-    // Basic filters (always available)
-    if (gender) query = query.eq('gender', gender);
-    if (age_min) query = query.gte('age', parseInt(age_min));
-    if (age_max) query = query.lte('age', parseInt(age_max));
-    if (location) query = query.ilike('location', `%${location}%`);
-    if (community) query = query.eq('community', community);
-    if (religion) query = query.eq('religion', religion);
+    // Basic filters (always available) — ilike for text fields
+    if (gender) query = query.ilike('gender', gender);
 
-    // Premium filters
+    // Location: match `location` OR `custom_fields->>place` (like basic search)
+    if (location) {
+      query = query.or(`location.ilike.%${location}%,custom_fields->>place.ilike.%${location}%`);
+    }
+
+    if (community) query = query.ilike('community', community);
+    if (religion) query = query.ilike('religion', religion);
+
+    // Premium filters — case-insensitive where appropriate
     if (isPremium) {
       if (education) query = query.ilike('education', `%${education}%`);
-      if (income) query = query.eq('income', income);
-      if (marital_status) query = query.eq('marital_status', marital_status);
-      if (food_pref) query = query.eq('food_pref', food_pref);
+      if (income) query = query.ilike('income', `%${income}%`);
+      if (marital_status) query = query.ilike('marital_status', `%${marital_status}%`);
+      if (food_pref) query = query.ilike('food_pref', `%${food_pref}%`);
       if (has_horoscope === 'true') query = query.not('rasi', 'is', null);
       if (verified_only === 'true') query = query.eq('is_verified', true);
     }
 
-    const { data, error } = await query.limit(100);
+    const { data, error } = await query.limit(300);
     if (error) throw error;
 
     const now = new Date();
 
-    // Sort: boosted → verified → premium plan users → rest
-    const sorted = (data || []).sort((a, b) => {
+    // ============================================
+    // Age filter with DOB fallback (JS level)
+    // ============================================
+    const ageMin = age_min ? parseInt(age_min) : null;
+    const ageMax = age_max ? parseInt(age_max) : null;
+
+    const enriched = (data || []).map((u) => ({
+      ...u,
+      _finalAge: u.age && u.age > 0 ? u.age : computeAgeFromDob(u.dob),
+    }));
+
+    const ageFiltered = enriched.filter((u) => {
+      if (ageMin === null && ageMax === null) return true;
+      const age = u._finalAge;
+      if (age === null || age === undefined || age === 0) return true; // include unknown ages
+      if (ageMin !== null && age < ageMin) return false;
+      if (ageMax !== null && age > ageMax) return false;
+      return true;
+    });
+
+    // Sort: boosted → verified → rest
+    const sorted = ageFiltered.sort((a, b) => {
       const aBoost = a.boost_expires_at && new Date(a.boost_expires_at) > now;
       const bBoost = b.boost_expires_at && new Date(b.boost_expires_at) > now;
       if (aBoost && !bBoost) return -1;
@@ -95,12 +134,16 @@ router.get('/advanced-search', async (req, res) => {
       return 0;
     });
 
-    const masked = sorted.map(u => ({
-      ...u,
-      mobile: u.contact_privacy === 'public' ? u.mobile : null,
-      email: u.contact_privacy === 'public' ? u.email : null,
-      is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
-    }));
+    const masked = sorted.slice(0, 100).map((u) => {
+      const { _finalAge, ...rest } = u;
+      return {
+        ...rest,
+        age: _finalAge,
+        mobile: u.contact_privacy === 'public' ? u.mobile : null,
+        email: u.contact_privacy === 'public' ? u.email : null,
+        is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
+      };
+    });
 
     res.json({
       results: masked,
@@ -123,7 +166,6 @@ router.get('/recommendations/:userId', async (req, res) => {
   try {
     const plan = await getUserPlan(userId);
 
-    // Determine tier limits
     const limits = {
       free: { count: 5, exclusive: false },
       gold: { count: 20, exclusive: false },
@@ -131,25 +173,16 @@ router.get('/recommendations/:userId', async (req, res) => {
     };
     const { count, exclusive } = limits[plan] || limits.free;
 
-    // Get current user's profile
     const { data: me } = await supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
+      .from('users').select('*').eq('id', userId).single();
 
     if (!me) return res.status(404).json({ error: "User not found" });
 
-    // Exclusions: already sent interest or shortlisted
     const { data: sent } = await supabaseAdmin
-      .from('interests')
-      .select('receiver_id')
-      .eq('sender_id', userId);
+      .from('interests').select('receiver_id').eq('sender_id', userId);
 
     const { data: shortlisted } = await supabaseAdmin
-      .from('interests')
-      .select('shortlisted_user_id')
-      .eq('user_id', userId);
+      .from('interests').select('shortlisted_user_id').eq('user_id', userId);
 
     const exclude = new Set([
       userId,
@@ -157,18 +190,16 @@ router.get('/recommendations/:userId', async (req, res) => {
       ...(shortlisted || []).map(s => s.shortlisted_user_id),
     ]);
 
-    // Base query: opposite gender, same community
-    const oppositeGender = me.gender === 'male' ? 'female' : 'male';
+    const oppositeGender = (me.gender || '').toLowerCase() === 'male' ? 'female' : 'male';
     let query = supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('gender', oppositeGender)
+      .from('users').select('*')
+      .ilike('gender', oppositeGender)
       .eq('is_suspended', false)
       .neq('id', userId)
       .limit(200);
 
     if (me.community) {
-      query = query.eq('community', me.community);
+      query = query.ilike('community', me.community);
     }
 
     const { data: potential, error } = await query;
@@ -176,7 +207,6 @@ router.get('/recommendations/:userId', async (req, res) => {
 
     const now = new Date();
 
-    // Score each profile
     const scored = (potential || [])
       .filter(u => !exclude.has(u.id))
       .map(u => {
@@ -226,16 +256,14 @@ router.get('/premium-matches/:userId', async (req, res) => {
       });
     }
 
-    // Premium matches: verified + has photo + bio + paid plan
     const { data: me } = await supabaseAdmin
       .from('users').select('*').eq('id', userId).single();
 
-    const oppositeGender = me.gender === 'male' ? 'female' : 'male';
+    const oppositeGender = (me.gender || '').toLowerCase() === 'male' ? 'female' : 'male';
 
     const { data, error } = await supabaseAdmin
-      .from('users')
-      .select('*')
-      .eq('gender', oppositeGender)
+      .from('users').select('*')
+      .ilike('gender', oppositeGender)
       .eq('is_verified', true)
       .eq('is_suspended', false)
       .not('photo_url', 'is', null)
