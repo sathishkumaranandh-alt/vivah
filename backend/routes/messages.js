@@ -18,10 +18,29 @@ async function areConnected(user1, user2) {
   return !!data;
 }
 
+async function isBlockedBetween(user1, user2) {
+  try {
+    const { data, error } = await supabase
+      .from("blocked_users")
+      .select("blocker_id")
+      .or(
+        `and(blocker_id.eq.${user1},blocked_id.eq.${user2}),and(blocker_id.eq.${user2},blocked_id.eq.${user1})`
+      )
+      .limit(1);
+    if (error) return { blocked: false, blockerId: null };
+    return {
+      blocked: (data || []).length > 0,
+      blockerId: data?.[0]?.blocker_id || null,
+    };
+  } catch {
+    return { blocked: false, blockerId: null };
+  }
+}
+
 function isUserOnline(lastSeenIso) {
   if (!lastSeenIso) return false;
   const lastSeen = new Date(lastSeenIso).getTime();
-  return Date.now() - lastSeen < 90 * 1000; // 90 seconds
+  return Date.now() - lastSeen < 90 * 1000;
 }
 
 // ============================================
@@ -44,7 +63,6 @@ router.get("/unread/:userId", async (req, res) => {
 
 // ============================================
 // 2. PATCH /messages/mark-read/:userId/:partnerId
-//    Set is_read = true + read_at = now
 // ============================================
 router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
   try {
@@ -67,13 +85,11 @@ router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
 
 // ============================================
 // 3. GET /messages/conversations/:userId
-//    Includes: unreadCount, isOnline, lastSeen
 // ============================================
 router.get("/conversations/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Get accepted interests
     const { data: connections } = await supabase
       .from("interests")
       .select("sender_id, receiver_id")
@@ -85,7 +101,21 @@ router.get("/conversations/:userId", async (req, res) => {
       connectedIds.add(c.sender_id === userId ? c.receiver_id : c.sender_id);
     });
 
-    // Get all messages
+    // ⭐ Exclude users who are blocked (either direction)
+    const { data: blocks } = await supabase
+      .from("blocked_users")
+      .select("blocker_id, blocked_id")
+      .or(`blocker_id.eq.${userId},blocked_id.eq.${userId}`);
+
+    const blockedIds = new Set();
+    (blocks || []).forEach((b) => {
+      blockedIds.add(b.blocker_id === userId ? b.blocked_id : b.blocker_id);
+    });
+
+    connectedIds.forEach((id) => {
+      if (blockedIds.has(id)) connectedIds.delete(id);
+    });
+
     const { data: messages, error } = await supabase
       .from("messages")
       .select("*")
@@ -111,7 +141,6 @@ router.get("/conversations/:userId", async (req, res) => {
       }
     }
 
-    // Add "no messages yet" conversations
     connectedIds.forEach((otherId) => {
       if (!conversationMap.has(otherId)) {
         conversationMap.set(otherId, {
@@ -124,7 +153,6 @@ router.get("/conversations/:userId", async (req, res) => {
       }
     });
 
-    // Fetch profiles (with last_seen for online status)
     const otherIds = Array.from(conversationMap.keys());
     let profiles = [];
     if (otherIds.length > 0) {
@@ -149,7 +177,6 @@ router.get("/conversations/:userId", async (req, res) => {
       };
     });
 
-    // Sort: online first, then by timestamp desc
     conversations.sort((a, b) => {
       if (a.isOnline && !b.isOnline) return -1;
       if (!a.isOnline && b.isOnline) return 1;
@@ -166,7 +193,6 @@ router.get("/conversations/:userId", async (req, res) => {
 
 // ============================================
 // 4. GET /messages/chat/:user1/:user2
-//    Also returns partner's last_seen for online status
 // ============================================
 router.get("/chat/:user1/:user2", async (req, res) => {
   try {
@@ -179,7 +205,6 @@ router.get("/chat/:user1/:user2", async (req, res) => {
       .order("timestamp", { ascending: true });
     if (error) throw error;
 
-    // Get partner's online status
     const { data: partner } = await supabase
       .from("users")
       .select("last_seen")
@@ -200,7 +225,6 @@ router.get("/chat/:user1/:user2", async (req, res) => {
 
 // ============================================
 // 5. POST /messages/send
-//    Supports: text, image_url, message_type
 // ============================================
 router.post("/send", async (req, res) => {
   try {
@@ -212,7 +236,6 @@ router.post("/send", async (req, res) => {
     if (sender_id === receiver_id) {
       return res.status(400).json({ error: "Cannot message yourself" });
     }
-    // Must have either text or image
     if ((!text || !text.trim()) && !image_url) {
       return res.status(400).json({ error: "Message cannot be empty" });
     }
@@ -222,6 +245,15 @@ router.post("/send", async (req, res) => {
       return res.status(403).json({
         error: "You can only message users you are connected with.",
         code: "NOT_CONNECTED",
+      });
+    }
+
+    // ⭐ Block check — Blocked users cannot message each other
+    const blockCheck = await isBlockedBetween(sender_id, receiver_id);
+    if (blockCheck.blocked) {
+      return res.status(403).json({
+        error: "You cannot send messages to this user. Connection blocked.",
+        code: "BLOCKED",
       });
     }
 
@@ -243,7 +275,7 @@ router.post("/send", async (req, res) => {
       .single();
     if (error) throw error;
 
-    // ⭐ Notify receiver (in-app)
+    // In-app notification
     try {
       const { data: sender } = await supabase
         .from("users")
@@ -265,7 +297,7 @@ router.post("/send", async (req, res) => {
       console.error("Notify error:", e);
     }
 
-    // ⭐ Notify receiver via Telegram
+    // Telegram notification
     try {
       const { data: receiver } = await supabase
         .from("users")
@@ -297,8 +329,6 @@ router.post("/send", async (req, res) => {
 
 // ============================================
 // 6. POST /messages/typing
-//    Body: { user_id, typing_to }
-//    Sets typing status — expires after 5 sec
 // ============================================
 router.post("/typing", async (req, res) => {
   try {
@@ -320,8 +350,7 @@ router.post("/typing", async (req, res) => {
 });
 
 // ============================================
-// 7. GET /messages/typing-status/:partnerId
-//    Check if partner is typing to me
+// 7. GET /messages/typing-status/:partnerId/:userId
 // ============================================
 router.get("/typing-status/:partnerId/:userId", async (req, res) => {
   try {
@@ -339,7 +368,7 @@ router.get("/typing-status/:partnerId/:userId", async (req, res) => {
     }
 
     const lastUpdate = new Date(data.updated_at).getTime();
-    const isTyping = Date.now() - lastUpdate < 5000; // 5 sec
+    const isTyping = Date.now() - lastUpdate < 5000;
 
     res.json({ isTyping });
   } catch (err) {
@@ -349,8 +378,6 @@ router.get("/typing-status/:partnerId/:userId", async (req, res) => {
 
 // ============================================
 // 8. POST /messages/heartbeat
-//    Body: { user_id }
-//    Updates last_seen — call every 60 seconds
 // ============================================
 router.post("/heartbeat", async (req, res) => {
   try {
@@ -370,7 +397,6 @@ router.post("/heartbeat", async (req, res) => {
 
 // ============================================
 // 9. DELETE /messages/chat/:user1/:user2
-//    Clear all messages between two users
 // ============================================
 router.delete("/chat/:user1/:user2", async (req, res) => {
   try {
