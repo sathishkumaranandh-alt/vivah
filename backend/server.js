@@ -23,6 +23,7 @@ import contactRequestsRoutes from './routes/contactRequests.js';
 import premiumRoutes from './routes/premium.js';
 import plansRoutes from './routes/plans.js';
 import telegramRoutes from './routes/telegram.js';
+import blockRoutes from './routes/blocks.js';
 
 dotenv.config();
 const app = express();
@@ -52,6 +53,7 @@ app.use('/boost', boostRoutes);
 app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
 app.use('/telegram', telegramRoutes);
+app.use('/blocks', blockRoutes);
 
 // Settings routes (part of audit.js)
 app.use('/', auditRoutes);
