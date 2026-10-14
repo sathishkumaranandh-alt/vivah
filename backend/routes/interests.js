@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { sendTelegram } from "../utils/telegram.js";
 
 const router = express.Router();
 
@@ -35,18 +36,54 @@ router.patch("/respond/:interestId", async (req, res) => {
     // ⭐ Notify original sender
     try {
       const { data: responder } = await supabase
-        .from("users").select("name").eq("id", data.receiver_id).single();
+        .from("users")
+        .select("name")
+        .eq("id", data.receiver_id)
+        .single();
 
-      await supabase.from("notifications").insert([{
-        user_id: data.sender_id,
-        actor_id: data.receiver_id,
-        type: status === "accepted" ? "interest_accepted" : "interest_declined",
-        title: status === "accepted" ? "Interest Accepted! 💕" : "Interest Declined",
-        body: status === "accepted"
-          ? `${responder?.name || "Someone"} accepted your interest. You can now message them!`
-          : `${responder?.name || "Someone"} declined your interest.`,
-        link: status === "accepted" ? `/messages?to=${data.receiver_id}` : "/interests",
-      }]);
+      await supabase.from("notifications").insert([
+        {
+          user_id: data.sender_id,
+          actor_id: data.receiver_id,
+          type: status === "accepted" ? "interest_accepted" : "interest_declined",
+          title: status === "accepted" ? "Interest Accepted! 💕" : "Interest Declined",
+          body:
+            status === "accepted"
+              ? `${responder?.name || "Someone"} accepted your interest. You can now message them!`
+              : `${responder?.name || "Someone"} declined your interest.`,
+          link:
+            status === "accepted"
+              ? `/messages?to=${data.receiver_id}`
+              : "/interests",
+        },
+      ]);
+
+      // 📱 Telegram notification
+      const { data: sender } = await supabase
+        .from("users")
+        .select("telegram_chat_id, telegram_opt_in")
+        .eq("id", data.sender_id)
+        .single();
+
+      if (sender?.telegram_opt_in && sender.telegram_chat_id) {
+        if (status === "accepted") {
+          await sendTelegram(
+            sender.telegram_chat_id,
+            `💕 <b>Interest Accepted!</b>\n\n` +
+              `<b>${responder?.name || "Someone"}</b> accepted your interest.\n` +
+              `You can now message them!\n\n` +
+              `👉 <a href="https://vivaha-frontend.vercel.app/messages?to=${data.receiver_id}">Chat Now →</a>`
+          );
+        } else {
+          await sendTelegram(
+            sender.telegram_chat_id,
+            `💔 <b>Interest Declined</b>\n\n` +
+              `<b>${responder?.name || "Someone"}</b> declined your interest.\n\n` +
+              `Keep exploring — your perfect match is waiting! 🎯\n\n` +
+              `👉 <a href="https://vivaha-frontend.vercel.app/discover">Discover More →</a>`
+          );
+        }
+      }
     } catch (e) {
       console.error("Notify error:", e);
     }
@@ -66,7 +103,9 @@ router.get("/received/:userId", async (req, res) => {
     const { userId } = req.params;
     const { status } = req.query;
     let query = supabase
-      .from("interests").select("*").eq("receiver_id", userId)
+      .from("interests")
+      .select("*")
+      .eq("receiver_id", userId)
       .order("created_at", { ascending: false });
     if (status) query = query.eq("status", status);
 
@@ -78,12 +117,19 @@ router.get("/received/:userId", async (req, res) => {
     if (senderIds.length > 0) {
       const { data: users } = await supabase
         .from("users")
-        .select("id, name, age, gender, location, religion, caste, education, occupation, bio, photo_url, community, is_verified")
+        .select(
+          "id, name, age, gender, location, religion, caste, education, occupation, bio, photo_url, community, is_verified"
+        )
         .in("id", senderIds);
-      (users || []).forEach((u) => { userMap[u.id] = u; });
+      (users || []).forEach((u) => {
+        userMap[u.id] = u;
+      });
     }
 
-    const enriched = (data || []).map((i) => ({ ...i, sender: userMap[i.sender_id] || null }));
+    const enriched = (data || []).map((i) => ({
+      ...i,
+      sender: userMap[i.sender_id] || null,
+    }));
     res.json({ interests: enriched, total: enriched.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -98,7 +144,9 @@ router.get("/sent/:userId", async (req, res) => {
     const { userId } = req.params;
     const { status } = req.query;
     let query = supabase
-      .from("interests").select("*").eq("sender_id", userId)
+      .from("interests")
+      .select("*")
+      .eq("sender_id", userId)
       .order("created_at", { ascending: false });
     if (status) query = query.eq("status", status);
 
@@ -110,12 +158,19 @@ router.get("/sent/:userId", async (req, res) => {
     if (receiverIds.length > 0) {
       const { data: users } = await supabase
         .from("users")
-        .select("id, name, age, gender, location, religion, caste, education, occupation, bio, photo_url, community, is_verified")
+        .select(
+          "id, name, age, gender, location, religion, caste, education, occupation, bio, photo_url, community, is_verified"
+        )
         .in("id", receiverIds);
-      (users || []).forEach((u) => { userMap[u.id] = u; });
+      (users || []).forEach((u) => {
+        userMap[u.id] = u;
+      });
     }
 
-    const enriched = (data || []).map((i) => ({ ...i, receiver: userMap[i.receiver_id] || null }));
+    const enriched = (data || []).map((i) => ({
+      ...i,
+      receiver: userMap[i.receiver_id] || null,
+    }));
     res.json({ interests: enriched, total: enriched.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -129,8 +184,10 @@ router.get("/count/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const { count, error } = await supabase
-      .from("interests").select("*", { count: "exact", head: true })
-      .eq("receiver_id", userId).eq("status", "pending");
+      .from("interests")
+      .select("*", { count: "exact", head: true })
+      .eq("receiver_id", userId)
+      .eq("status", "pending");
     if (error) throw error;
     res.json({ pendingCount: count || 0 });
   } catch (err) {
@@ -145,8 +202,11 @@ router.get("/status/:userId/:otherId", async (req, res) => {
   try {
     const { userId, otherId } = req.params;
     const { data, error } = await supabase
-      .from("interests").select("*")
-      .or(`and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`)
+      .from("interests")
+      .select("*")
+      .or(
+        `and(sender_id.eq.${userId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${userId})`
+      )
       .maybeSingle();
     if (error) throw error;
     if (!data) return res.json({ status: "none", direction: null });
@@ -167,12 +227,17 @@ router.post("/send", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
     if (sender_id === receiver_id) {
-      return res.status(400).json({ error: "Cannot send interest to yourself" });
+      return res
+        .status(400)
+        .json({ error: "Cannot send interest to yourself" });
     }
 
     const { data: existing } = await supabase
-      .from("interests").select("*")
-      .or(`and(sender_id.eq.${sender_id},receiver_id.eq.${receiver_id}),and(sender_id.eq.${receiver_id},receiver_id.eq.${sender_id})`)
+      .from("interests")
+      .select("*")
+      .or(
+        `and(sender_id.eq.${sender_id},receiver_id.eq.${receiver_id}),and(sender_id.eq.${receiver_id},receiver_id.eq.${sender_id})`
+      )
       .maybeSingle();
 
     if (existing) {
@@ -185,8 +250,15 @@ router.post("/send", async (req, res) => {
       if (existing.status === "declined" && existing.sender_id === sender_id) {
         const { data, error } = await supabase
           .from("interests")
-          .update({ status: "pending", created_at: new Date().toISOString(), responded_at: null, message: message || null })
-          .eq("id", existing.id).select().single();
+          .update({
+            status: "pending",
+            created_at: new Date().toISOString(),
+            responded_at: null,
+            message: message || null,
+          })
+          .eq("id", existing.id)
+          .select()
+          .single();
         if (error) throw error;
         return res.json({ message: "Interest re-sent", interest: data });
       }
@@ -195,24 +267,48 @@ router.post("/send", async (req, res) => {
 
     const { data, error } = await supabase
       .from("interests")
-      .insert([{ sender_id, receiver_id, status: "pending", message: message || null }])
-      .select().single();
+      .insert([
+        { sender_id, receiver_id, status: "pending", message: message || null },
+      ])
+      .select()
+      .single();
 
     if (error) throw error;
 
     // ⭐ Notify receiver
     try {
       const { data: sender } = await supabase
-        .from("users").select("name").eq("id", sender_id).single();
+        .from("users")
+        .select("name")
+        .eq("id", sender_id)
+        .single();
 
-      await supabase.from("notifications").insert([{
-        user_id: receiver_id,
-        actor_id: sender_id,
-        type: "interest_received",
-        title: "New Interest 💌",
-        body: `${sender?.name || "Someone"} sent you an interest`,
-        link: "/interests",
-      }]);
+      await supabase.from("notifications").insert([
+        {
+          user_id: receiver_id,
+          actor_id: sender_id,
+          type: "interest_received",
+          title: "New Interest 💌",
+          body: `${sender?.name || "Someone"} sent you an interest`,
+          link: "/interests",
+        },
+      ]);
+
+      // 📱 Telegram notification
+      const { data: receiver } = await supabase
+        .from("users")
+        .select("telegram_chat_id, telegram_opt_in")
+        .eq("id", receiver_id)
+        .single();
+
+      if (receiver?.telegram_opt_in && receiver.telegram_chat_id) {
+        await sendTelegram(
+          receiver.telegram_chat_id,
+          `💌 <b>New Interest!</b>\n\n` +
+            `<b>${sender?.name || "Someone"}</b> sent you an interest.\n\n` +
+            `👉 <a href="https://vivaha-frontend.vercel.app/interests">View on Vivaha →</a>`
+        );
+      }
     } catch (e) {
       console.error("Notify error:", e);
     }
@@ -233,15 +329,18 @@ router.post("/shortlist", async (req, res) => {
       return res.status(400).json({ error: "Missing fields" });
     }
     const { data: existing } = await supabase
-      .from("shortlists").select("*")
-      .eq("user_id", user_id).eq("shortlisted_user_id", shortlisted_user_id)
+      .from("shortlists")
+      .select("*")
+      .eq("user_id", user_id)
+      .eq("shortlisted_user_id", shortlisted_user_id)
       .maybeSingle();
     if (existing) {
       await supabase.from("shortlists").delete().eq("id", existing.id);
       return res.json({ action: "removed" });
     }
     const { error } = await supabase
-      .from("shortlists").insert([{ user_id, shortlisted_user_id }]);
+      .from("shortlists")
+      .insert([{ user_id, shortlisted_user_id }]);
     if (error) throw error;
     res.json({ action: "added" });
   } catch (err) {
@@ -256,7 +355,9 @@ router.get("/shortlisted/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
     const { data, error } = await supabase
-      .from("shortlists").select("*").eq("user_id", userId)
+      .from("shortlists")
+      .select("*")
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
     if (error) throw error;
 
@@ -265,12 +366,19 @@ router.get("/shortlisted/:userId", async (req, res) => {
     if (ids.length > 0) {
       const { data: users } = await supabase
         .from("users")
-        .select("id, name, age, gender, location, religion, caste, education, occupation, bio, photo_url, community, is_verified")
+        .select(
+          "id, name, age, gender, location, religion, caste, education, occupation, bio, photo_url, community, is_verified"
+        )
         .in("id", ids);
-      (users || []).forEach((u) => { userMap[u.id] = u; });
+      (users || []).forEach((u) => {
+        userMap[u.id] = u;
+      });
     }
 
-    const enriched = (data || []).map((s) => ({ ...s, user: userMap[s.shortlisted_user_id] || null }));
+    const enriched = (data || []).map((s) => ({
+      ...s,
+      user: userMap[s.shortlisted_user_id] || null,
+    }));
     res.json({ shortlisted: enriched, total: enriched.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
