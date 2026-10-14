@@ -29,12 +29,17 @@ router.post('/request', async (req, res) => {
       const { data: requester } = await supabaseAdmin
         .from('users').select('name').eq('id', requester_id).single();
 
-      await supabaseAdmin.from('notifications').insert({
+      const { error: notifError } = await supabaseAdmin.from('notifications').insert({
         user_id: owner_id,
+        actor_id: requester_id,                    // ✅ ADDED
+        type: 'photo_request',                     // ✅ ADDED
         title: '📩 New Photo Request',
-        message: `${requester?.name || "Someone"} wants to view your photos. Tap to approve or deny.`,
+        body: `${requester?.name || "Someone"} wants to view your photos.`,  // ✅ body (not message)
+        link: '/photo-requests',                   // ✅ ADDED
         is_read: false,
       });
+
+      if (notifError) console.error("Notification insert error:", notifError);
     } catch (notifErr) {
       console.error("Notification error:", notifErr);
     }
@@ -92,14 +97,22 @@ router.put('/respond/:id', async (req, res) => {
       const { data: owner } = await supabaseAdmin
         .from('users').select('name').eq('id', data.owner_id).single();
 
-      await supabaseAdmin.from('notifications').insert({
-        user_id: data.requester_id,
-        title: status === 'approved' ? '✅ Photo Access Approved' : '❌ Photo Request Denied',
-        message: status === 'approved'
+      const isApproved = status === 'approved';
+      const { error: notifError } = await supabaseAdmin.from('notifications').insert({
+        user_id: data.requester_id,                // ✅ requester gets notified
+        actor_id: data.owner_id,                   // ✅ ADDED
+        type: isApproved ? 'photo_request_accepted' : 'photo_request_declined',  // ✅ ADDED
+        title: isApproved ? '✅ Photo Access Approved' : '❌ Photo Request Denied',
+        body: isApproved
           ? `${owner?.name || "User"} approved your photo request.`
           : `${owner?.name || "User"} denied your photo request.`,
+        link: isApproved
+          ? `/profile/${data.owner_id}`           // ✅ go to profile
+          : '/photo-requests',                     // ✅ or requests page
         is_read: false,
       });
+
+      if (notifError) console.error("Notification insert error:", notifError);
     } catch (notifErr) {
       console.error("Notification error:", notifErr);
     }
