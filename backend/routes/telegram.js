@@ -12,15 +12,15 @@ const supabaseAdmin = createClient(
 );
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 
 // ============================================
 // LINK user's Telegram account
-// POST /telegram/link
-// Body: { userId, chatId }
 // ============================================
 router.post('/link', async (req, res) => {
   const { userId, chatId } = req.body;
-  if (!userId || !chatId) return res.status(400).json({ error: "Missing userId or chatId" });
+  if (!userId || !chatId)
+    return res.status(400).json({ error: 'Missing userId or chatId' });
 
   try {
     const { error } = await supabaseAdmin
@@ -28,7 +28,7 @@ router.post('/link', async (req, res) => {
       .update({ telegram_chat_id: String(chatId), telegram_opt_in: true })
       .eq('id', userId);
     if (error) throw error;
-    res.json({ success: true, message: "Telegram linked" });
+    res.json({ success: true, message: 'Telegram linked' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -36,12 +36,10 @@ router.post('/link', async (req, res) => {
 
 // ============================================
 // UNLINK Telegram
-// POST /telegram/unlink
-// Body: { userId }
 // ============================================
 router.post('/unlink', async (req, res) => {
   const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
   try {
     const { error } = await supabaseAdmin
       .from('users')
@@ -55,17 +53,29 @@ router.post('/unlink', async (req, res) => {
 });
 
 // ============================================
-// WEBHOOK — Telegram calls this URL when user sends /start, /stop, /help
-// POST /telegram/webhook
+// 🔒 WEBHOOK — Verify secret from Telegram
 // ============================================
 router.post('/webhook', async (req, res) => {
   try {
+    // 🔒 Verify secret token
+    const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
+
+    if (!WEBHOOK_SECRET) {
+      console.error('❌ TELEGRAM_WEBHOOK_SECRET not set in env');
+      return res.sendStatus(500);
+    }
+
+    if (secretHeader !== WEBHOOK_SECRET) {
+      console.warn('🚫 Webhook unauthorized:', secretHeader);
+      return res.sendStatus(403);
+    }
+
     const update = req.body;
     const message = update.message;
     if (!message) return res.json({ ok: true });
 
     const chatId = message.chat.id;
-    const text = (message.text || "").trim();
+    const text = (message.text || '').trim();
 
     // ---- /start [USER_ID] ----
     if (text.startsWith('/start')) {
@@ -73,7 +83,6 @@ router.post('/webhook', async (req, res) => {
       const userId = parts[1];
 
       if (userId) {
-        // Auto-link the user
         await supabaseAdmin
           .from('users')
           .update({ telegram_chat_id: String(chatId), telegram_opt_in: true })
@@ -91,7 +100,7 @@ router.post('/webhook', async (req, res) => {
           `• ✅ Match approvals\n` +
           `• ⭐ Subscription alerts\n\n` +
           `Send /stop to pause, /help for commands.`,
-        parse_mode: "HTML",
+        parse_mode: 'HTML',
       });
       return res.json({ ok: true });
     }
@@ -113,7 +122,7 @@ router.post('/webhook', async (req, res) => {
 
       await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         chat_id: chatId,
-        text: "🔕 Notifications paused. Send /start to resume.",
+        text: '🔕 Notifications paused. Send /start to resume.',
       });
       return res.json({ ok: true });
     }
@@ -127,15 +136,14 @@ router.post('/webhook', async (req, res) => {
           `/start — Enable notifications\n` +
           `/stop — Disable notifications\n` +
           `/help — Show this menu`,
-        parse_mode: "HTML",
+        parse_mode: 'HTML',
       });
       return res.json({ ok: true });
     }
 
-    // Default: acknowledge
     res.json({ ok: true });
   } catch (err) {
-    console.error("Telegram webhook error:", err);
+    console.error('Telegram webhook error:', err);
     res.json({ ok: true });
   }
 });
