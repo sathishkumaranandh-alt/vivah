@@ -2,12 +2,16 @@ import axios from 'axios';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-// Debug log to verify token loading in Render
-console.log("TELEGRAM TOKEN LOADED:", BOT_TOKEN ? "Yes (length: " + BOT_TOKEN.length + ")" : "No");
+// 🔒 Safe log — no token details leaked
+if (!BOT_TOKEN) {
+  console.error('❌ TELEGRAM_BOT_TOKEN not set');
+} else if (process.env.NODE_ENV === 'development') {
+  console.log('✅ TELEGRAM_BOT_TOKEN loaded');
+}
 
 export async function sendTelegram(chatId, text) {
   if (!BOT_TOKEN) {
-    console.error("TELEGRAM_BOT_TOKEN not set");
+    console.error('TELEGRAM_BOT_TOKEN not set');
     return null;
   }
   if (!chatId) return null;
@@ -18,14 +22,14 @@ export async function sendTelegram(chatId, text) {
       {
         chat_id: chatId,
         text,
-        parse_mode: "HTML",
+        parse_mode: 'HTML',
         disable_web_page_preview: true,
       },
       { timeout: 10000 }
     );
     return res.data;
   } catch (err) {
-    console.error("Telegram send error:", err.response?.data || err.message);
+    console.error('Telegram send error:', err.response?.data || err.message);
     return null;
   }
 }
@@ -38,14 +42,14 @@ export async function sendTelegramWithButtons(chatId, text, buttons) {
       {
         chat_id: chatId,
         text,
-        parse_mode: "HTML",
+        parse_mode: 'HTML',
         reply_markup: { inline_keyboard: buttons },
       },
       { timeout: 10000 }
     );
     return res.data;
   } catch (err) {
-    console.error("Telegram send error:", err.response?.data || err.message);
+    console.error('Telegram send error:', err.response?.data || err.message);
     return null;
   }
-  }
+        }
