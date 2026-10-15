@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAdmin } from '../utils/auth.js';
 
 dotenv.config();
 const router = express.Router();
@@ -11,7 +12,7 @@ const supabaseAdmin = createClient(
 );
 
 // ============================================
-// PUBLIC — GET approved stories only
+// 🌍 PUBLIC — GET approved stories only
 // ============================================
 router.get('/', async (req, res) => {
   try {
@@ -31,9 +32,9 @@ router.get('/', async (req, res) => {
 });
 
 // ============================================
-// ADMIN — GET all stories (approved + not)
+// 🔒 ADMIN — GET all stories (approved + not)
 // ============================================
-router.get('/admin/all', async (req, res) => {
+router.get('/admin/all', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('success_stories')
@@ -50,9 +51,9 @@ router.get('/admin/all', async (req, res) => {
 });
 
 // ============================================
-// CREATE — New story
+// 🔒 CREATE — New story
 // ============================================
-router.post('/', async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   const {
     couple_names,
     story,
@@ -75,7 +76,6 @@ router.post('/', async (req, res) => {
       is_approved: is_approved === true,
     };
 
-    // Optional fields — only add if provided (safe if columns don't exist yet)
     if (wedding_date) payload.wedding_date = wedding_date;
     if (location) payload.location = location;
     if (display_order !== undefined) payload.display_order = parseInt(display_order, 10) || 0;
@@ -95,9 +95,9 @@ router.post('/', async (req, res) => {
 });
 
 // ============================================
-// UPDATE — Edit existing story
+// 🔒 UPDATE — Edit existing story
 // ============================================
-router.put('/:id', async (req, res) => {
+router.put('/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const {
     couple_names,
@@ -135,9 +135,9 @@ router.put('/:id', async (req, res) => {
 });
 
 // ============================================
-// DELETE — Remove story
+// 🔒 DELETE — Remove story
 // ============================================
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { error } = await supabaseAdmin
