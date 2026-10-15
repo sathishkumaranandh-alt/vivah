@@ -29,8 +29,11 @@ import blockRoutes from './routes/blocks.js';
 dotenv.config();
 const app = express();
 
+// Trust Render's proxy (needed for accurate IP in rate limit)
+app.set('trust proxy', 1);
+
 // ============================================
-// 1. CORS — Restrict to known origins
+// 1. CORS
 // ============================================
 const ALLOWED_ORIGINS = [
   'https://vivaha-frontend.vercel.app',
@@ -42,10 +45,8 @@ const ALLOWED_ORIGINS = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, Postman)
       if (!origin) return callback(null, true);
 
-      // Check exact match or vercel preview pattern
       const isAllowed =
         ALLOWED_ORIGINS.includes(origin) ||
         /^https:\/\/vivaha-frontend-[a-z0-9]+\.vercel\.app$/.test(origin);
@@ -68,47 +69,77 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ============================================
-// 3. Rate Limiters
+// 3. Rate Limiters — Different per route type
 // ============================================
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: 300, // Was 100 — Chat polling needs more
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method === 'GET', // Skip GET requests (polling)
 });
 
-const strictLimiter = rateLimit({
+// Sensitive user actions (send interest, message, request)
+const actionLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 15,
-  message: { error: 'Too many requests. Try again in a minute.' },
+  max: 40, // Was 15 — More breathing room
+  message: { error: 'Too many actions. Please wait a minute.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+// Login/signup
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 5,
-  message: { error: 'Too many login attempts. Try again in 5 minutes.' },
+  max: 10, // Was 5
+  message: { error: 'Too many login attempts. Try again in a minute.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+// Heartbeat (users send every 60s + tab switches)
 const heartbeatLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 70,
+  max: 150, // Was 70
   message: { error: 'Too many heartbeats' },
 });
 
-// Apply limiters
-app.use('/auth', authLimiter);
+// Polling endpoints — very generous
+const pollingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 400, // For chat/notifications polling
+  message: { error: 'Polling too fast' },
+});
+
+// ============================================
+// Apply limiters (order matters!)
+// ============================================
+
+// Specific endpoints first
 app.use('/messages/heartbeat', heartbeatLimiter);
-app.use('/interests', strictLimiter);
-app.use('/messages', strictLimiter);
-app.use('/photo-requests', strictLimiter);
-app.use('/contact-requests', strictLimiter);
-app.use('/reports', strictLimiter);
-app.use('/boost', strictLimiter);
+
+// Polling GETs — generous
+app.use('/messages/chat', pollingLimiter);
+app.use('/messages/typing-status', pollingLimiter);
+app.use('/messages/conversations', pollingLimiter);
+app.use('/messages/unread', pollingLimiter);
+app.use('/notifications', pollingLimiter);
+
+// Sensitive POST actions — strict
+app.use('/messages/send', actionLimiter);
+app.use('/interests/send', actionLimiter);
+app.use('/interests/respond', actionLimiter);
+app.use('/interests/shortlist', actionLimiter);
+app.use('/photo-requests/request', actionLimiter);
+app.use('/contact-requests/request', actionLimiter);
+app.use('/reports', actionLimiter);
+app.use('/boost', actionLimiter);
+
+// Auth — strictest
+app.use('/auth', authLimiter);
+
+// General fallback
 app.use(generalLimiter);
 
 // ============================================
@@ -148,7 +179,7 @@ app.get('/', (req, res) => {
 });
 
 // ============================================
-// 4. Error Handler — No internal info leak
+// Error Handler
 // ============================================
 app.use((err, req, res, next) => {
   console.error('❌ Server error:', {
