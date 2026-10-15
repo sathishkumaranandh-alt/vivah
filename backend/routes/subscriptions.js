@@ -1,10 +1,11 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { requireAdmin } from "../utils/auth.js";
 
 const router = express.Router();
 
 // ============================================================
-// PLAN PRICING (in ₹)
+// PLAN PRICING (in ₹) — fallback for hardcoded plans
 // ============================================================
 const PLANS = {
   free: { name: "Free", price: 0, durationDays: null },
@@ -30,7 +31,6 @@ router.get("/user/:userId", async (req, res) => {
 
     if (error) throw error;
 
-    // If no subscription, return default free
     if (!data) {
       return res.json({
         subscription: {
@@ -44,14 +44,12 @@ router.get("/user/:userId", async (req, res) => {
       });
     }
 
-    // Check if expired
     let subscription = data;
     if (
       subscription.expires_at &&
       new Date(subscription.expires_at) < new Date() &&
       subscription.status === "active"
     ) {
-      // Auto-expire
       await supabase
         .from("subscriptions")
         .update({ status: "expired", updated_at: new Date().toISOString() })
@@ -92,14 +90,12 @@ router.post("/create", async (req, res) => {
       expiresAt = expDate.toISOString();
     }
 
-    // Cancel any existing active subscriptions
     await supabase
       .from("subscriptions")
       .update({ status: "cancelled", updated_at: now.toISOString() })
       .eq("user_id", user_id)
       .eq("status", "active");
 
-    // Create new subscription
     const { data, error } = await supabase
       .from("subscriptions")
       .insert([
@@ -110,7 +106,7 @@ router.post("/create", async (req, res) => {
           amount: planConfig.price,
           started_at: now.toISOString(),
           expires_at: expiresAt,
-          payment_id: `SIM_${Date.now()}`, // Simulated payment ID
+          payment_id: `SIM_${Date.now()}`,
         },
       ])
       .select()
@@ -162,10 +158,10 @@ router.post("/cancel", async (req, res) => {
 });
 
 // ============================================================
-// ADMIN: GET /subscriptions/admin/all
+// 🔒 ADMIN: GET /subscriptions/admin/all
 // Get all subscriptions with user info
 // ============================================================
-router.get("/admin/all", async (req, res) => {
+router.get("/admin/all", requireAdmin, async (req, res) => {
   try {
     const { data: subs, error } = await supabase
       .from("subscriptions")
@@ -175,7 +171,6 @@ router.get("/admin/all", async (req, res) => {
 
     if (error) throw error;
 
-    // Fetch user info for each subscription
     const userIds = [...new Set((subs || []).map((s) => s.user_id))];
     let userMap = {};
     if (userIds.length > 0) {
@@ -201,10 +196,10 @@ router.get("/admin/all", async (req, res) => {
 });
 
 // ============================================================
-// ADMIN: GET /subscriptions/admin/stats
+// 🔒 ADMIN: GET /subscriptions/admin/stats
 // Revenue & subscription statistics
 // ============================================================
-router.get("/admin/stats", async (req, res) => {
+router.get("/admin/stats", requireAdmin, async (req, res) => {
   try {
     const { data: allSubs } = await supabase
       .from("subscriptions")
@@ -239,10 +234,10 @@ router.get("/admin/stats", async (req, res) => {
 });
 
 // ============================================================
-// ADMIN: PATCH /subscriptions/admin/grant/:userId
+// 🔒 ADMIN: PATCH /subscriptions/admin/grant/:userId
 // Grant free premium to a user
 // ============================================================
-router.patch("/admin/grant/:userId", async (req, res) => {
+router.patch("/admin/grant/:userId", requireAdmin, async (req, res) => {
   try {
     const { userId } = req.params;
     const { plan, days } = req.body;
@@ -255,14 +250,12 @@ router.patch("/admin/grant/:userId", async (req, res) => {
     const expDate = new Date(now);
     expDate.setDate(expDate.getDate() + (days || PLANS[plan].durationDays));
 
-    // Cancel existing active
     await supabase
       .from("subscriptions")
       .update({ status: "cancelled", updated_at: now.toISOString() })
       .eq("user_id", userId)
       .eq("status", "active");
 
-    // Create gifted subscription
     const { data, error } = await supabase
       .from("subscriptions")
       .insert([
@@ -270,7 +263,7 @@ router.patch("/admin/grant/:userId", async (req, res) => {
           user_id: userId,
           plan,
           status: "active",
-          amount: 0, // Gifted = free
+          amount: 0,
           started_at: now.toISOString(),
           expires_at: expDate.toISOString(),
           payment_id: `GIFT_${Date.now()}`,
@@ -292,10 +285,10 @@ router.patch("/admin/grant/:userId", async (req, res) => {
 });
 
 // ============================================================
-// ADMIN: PATCH /subscriptions/admin/extend/:userId
+// 🔒 ADMIN: PATCH /subscriptions/admin/extend/:userId
 // Extend a subscription
 // ============================================================
-router.patch("/admin/extend/:userId", async (req, res) => {
+router.patch("/admin/extend/:userId", requireAdmin, async (req, res) => {
   try {
     const { userId } = req.params;
     const { days } = req.body;
@@ -304,7 +297,6 @@ router.patch("/admin/extend/:userId", async (req, res) => {
       return res.status(400).json({ error: "Invalid days" });
     }
 
-    // Get current active subscription
     const { data: current, error: fetchError } = await supabase
       .from("subscriptions")
       .select("*")
@@ -319,7 +311,6 @@ router.patch("/admin/extend/:userId", async (req, res) => {
       return res.status(404).json({ error: "No active subscription found" });
     }
 
-    // Calculate new expiry
     const baseDate = current.expires_at
       ? new Date(current.expires_at)
       : new Date();
@@ -349,10 +340,10 @@ router.patch("/admin/extend/:userId", async (req, res) => {
 });
 
 // ============================================================
-// ADMIN: DELETE /subscriptions/admin/:subscriptionId
+// 🔒 ADMIN: DELETE /subscriptions/admin/:subscriptionId
 // Delete a subscription record
 // ============================================================
-router.delete("/admin/:subscriptionId", async (req, res) => {
+router.delete("/admin/:subscriptionId", requireAdmin, async (req, res) => {
   try {
     const { subscriptionId } = req.params;
 
@@ -371,54 +362,83 @@ router.delete("/admin/:subscriptionId", async (req, res) => {
 });
 
 // ============================================================
-// GET /subscriptions/plans
-// List all available plans
+// 🌍 GET /subscriptions/plans
+// List all ACTIVE plans from DATABASE (dynamic)
 // ============================================================
-router.get("/plans", (req, res) => {
-  res.json({
-    plans: [
-      {
-        id: "free",
-        name: "Free",
-        price: 0,
-        duration: "Lifetime",
-        features: [
-          "Create profile",
-          "View up to 10 profiles/day",
-          "Send up to 3 messages/day",
-          "Basic search",
-        ],
-      },
-      {
-        id: "gold",
-        name: "Gold",
-        price: 499,
-        duration: "30 days",
-        popular: true,
-        features: [
-          "Unlimited profile views",
-          "Unlimited messages",
-          "See who viewed your profile",
-          "Advanced search filters",
-          "Priority customer support",
-        ],
-      },
-      {
-        id: "platinum",
-        name: "Platinum",
-        price: 999,
-        duration: "90 days",
-        features: [
-          "Everything in Gold",
-          "Featured profile (top of search)",
-          "Verified badge",
-          "Profile boost weekly",
-          "Direct contact details access",
-          "Dedicated relationship manager",
-        ],
-      },
-    ],
-  });
+router.get("/plans", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("membership_plans")
+      .select("*")
+      .eq("is_active", true)
+      .order("display_order", { ascending: true });
+
+    if (error) throw error;
+
+    const plans = (data || []).map((p) => ({
+      id: (p.name || "").toLowerCase().replace(/\s+/g, "_"),
+      name: p.name,
+      price: p.price || 0,
+      duration:
+        p.duration_days === 9999
+          ? "Lifetime"
+          : `${p.duration_days || 30} days`,
+      features: p.features || [],
+      popular: p.name === "Gold" || p.is_popular === true,
+      permissions: p.permissions || {},
+      display_order: p.display_order || 0,
+      is_active: p.is_active,
+    }));
+
+    res.json({ plans });
+  } catch (err) {
+    console.error("Get plans error:", err);
+    // Fallback to hardcoded plans if DB fails
+    res.json({
+      plans: [
+        {
+          id: "free",
+          name: "Free",
+          price: 0,
+          duration: "Lifetime",
+          features: [
+            "Create profile",
+            "View up to 10 profiles/day",
+            "Send up to 3 messages/day",
+            "Basic search",
+          ],
+        },
+        {
+          id: "gold",
+          name: "Gold",
+          price: 499,
+          duration: "30 days",
+          popular: true,
+          features: [
+            "Unlimited profile views",
+            "Unlimited messages",
+            "See who viewed your profile",
+            "Advanced search filters",
+            "Priority customer support",
+          ],
+        },
+        {
+          id: "platinum",
+          name: "Platinum",
+          price: 999,
+          duration: "90 days",
+          features: [
+            "Everything in Gold",
+            "Featured profile (top of search)",
+            "Verified badge",
+            "Profile boost weekly",
+            "Direct contact details access",
+            "Dedicated relationship manager",
+          ],
+        },
+      ],
+    });
+  }
 });
 
 export default router;
