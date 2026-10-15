@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAdmin } from '../utils/auth.js';
 
 dotenv.config();
 const router = express.Router();
@@ -10,7 +11,9 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// GET all active plans (for users)
+// ============================================
+// 🌍 GET all active plans (for users)
+// ============================================
 router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -25,8 +28,10 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET all plans including inactive (Admin only)
-router.get('/admin/all', async (req, res) => {
+// ============================================
+// 🔒 ADMIN — GET all plans including inactive
+// ============================================
+router.get('/admin/all', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('membership_plans')
@@ -39,7 +44,9 @@ router.get('/admin/all', async (req, res) => {
   }
 });
 
-// GET user's current plan & permissions
+// ============================================
+// 🌍 GET user's current plan & permissions
+// ============================================
 router.get('/user-plan/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
@@ -72,8 +79,10 @@ router.get('/user-plan/:userId', async (req, res) => {
   }
 });
 
-// CREATE a new plan (Admin)
-router.post('/', async (req, res) => {
+// ============================================
+// 🔒 CREATE a new plan (Admin)
+// ============================================
+router.post('/', requireAdmin, async (req, res) => {
   const { name, price, duration_days, features, permissions, display_order } = req.body;
   try {
     const { data, error } = await supabaseAdmin
@@ -88,10 +97,15 @@ router.post('/', async (req, res) => {
   }
 });
 
-// UPDATE a plan (Admin)
-router.put('/:id', async (req, res) => {
+// ============================================
+// 🔒 UPDATE a plan (Admin)
+// ============================================
+router.put('/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const updates = req.body;
+  const updates = { ...req.body };
+  // Don't store admin_id in DB
+  delete updates.admin_id;
+
   try {
     const { data, error } = await supabaseAdmin
       .from('membership_plans')
@@ -106,11 +120,16 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE a plan (Admin)
-router.delete('/:id', async (req, res) => {
+// ============================================
+// 🔒 DELETE a plan (Admin)
+// ============================================
+router.delete('/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
-    const { error } = await supabaseAdmin.from('membership_plans').delete().eq('id', id);
+    const { error } = await supabaseAdmin
+      .from('membership_plans')
+      .delete()
+      .eq('id', id);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
