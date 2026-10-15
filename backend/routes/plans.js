@@ -66,7 +66,6 @@ router.get('/user-plan/:userId', async (req, res) => {
       .from('membership_plans')
       .select('*')
       .ilike('name', planName)
-      .eq('is_active', true)
       .single();
 
     res.json({
@@ -81,30 +80,70 @@ router.get('/user-plan/:userId', async (req, res) => {
 
 // ============================================
 // 🔒 CREATE a new plan (Admin)
+// ✅ FIX: Auto set is_active = true
 // ============================================
 router.post('/', requireAdmin, async (req, res) => {
   const { name, price, duration_days, features, permissions, display_order } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Plan name is required' });
+  }
+
   try {
     const { data, error } = await supabaseAdmin
       .from('membership_plans')
-      .insert({ name, price, duration_days, features, permissions, display_order })
+      .insert({
+        name,
+        price: parseInt(price, 10) || 0,
+        duration_days: parseInt(duration_days, 10) || 30,
+        features: features || [],
+        permissions: permissions || {},
+        display_order: parseInt(display_order, 10) || 0,
+        is_active: true,  // ✅ NEW — auto active so it shows on subscription page
+      })
       .select()
       .single();
     if (error) throw error;
     res.json({ plan: data });
   } catch (err) {
+    console.error('Create plan error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ============================================
 // 🔒 UPDATE a plan (Admin)
+// ✅ FIX: Clean updates, safe types
 // ============================================
 router.put('/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const updates = { ...req.body };
-  // Don't store admin_id in DB
+
+  // 🔒 Remove fields that should not be updated
   delete updates.admin_id;
+  delete updates.id;
+  delete updates.created_at;
+
+  // 🔒 Ensure permissions is a valid object
+  if (updates.permissions && typeof updates.permissions === 'object') {
+    updates.permissions = { ...updates.permissions };
+  }
+
+  // 🔒 Ensure is_active is boolean
+  if (updates.is_active !== undefined) {
+    updates.is_active = updates.is_active === true || updates.is_active === 'true';
+  }
+
+  // 🔒 Ensure numeric fields are numbers
+  if (updates.price !== undefined) {
+    updates.price = parseInt(updates.price, 10) || 0;
+  }
+  if (updates.duration_days !== undefined) {
+    updates.duration_days = parseInt(updates.duration_days, 10) || 0;
+  }
+  if (updates.display_order !== undefined) {
+    updates.display_order = parseInt(updates.display_order, 10) || 0;
+  }
 
   try {
     const { data, error } = await supabaseAdmin
@@ -116,6 +155,7 @@ router.put('/:id', requireAdmin, async (req, res) => {
     if (error) throw error;
     res.json({ plan: data });
   } catch (err) {
+    console.error('Update plan error:', err);
     res.status(500).json({ error: err.message });
   }
 });
