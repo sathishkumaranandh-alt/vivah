@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAdmin } from '../utils/auth.js';
 
 dotenv.config();
 const router = express.Router();
@@ -10,7 +11,9 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// GET custom fields
+// ============================================
+// 🌍 GET custom fields (public read)
+// ============================================
 router.get('/fields', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -25,8 +28,10 @@ router.get('/fields', async (req, res) => {
   }
 });
 
-// CREATE custom field
-router.post('/fields', async (req, res) => {
+// ============================================
+// 🔒 CREATE custom field
+// ============================================
+router.post('/fields', requireAdmin, async (req, res) => {
   const {
     field_key, label, type, options, is_required, step,
     show_in_profile, profile_tab, display_order
@@ -54,10 +59,14 @@ router.post('/fields', async (req, res) => {
   }
 });
 
-// UPDATE custom field
-router.put('/fields/:id', async (req, res) => {
+// ============================================
+// 🔒 UPDATE custom field
+// ============================================
+router.put('/fields/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const updates = req.body;
+  const updates = { ...req.body };
+  delete updates.admin_id;
+
   try {
     const { data, error } = await supabaseAdmin
       .from('registration_fields')
@@ -72,11 +81,16 @@ router.put('/fields/:id', async (req, res) => {
   }
 });
 
-// DELETE custom field
-router.delete('/fields/:id', async (req, res) => {
+// ============================================
+// 🔒 DELETE custom field
+// ============================================
+router.delete('/fields/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
-    const { error } = await supabaseAdmin.from('registration_fields').delete().eq('id', id);
+    const { error } = await supabaseAdmin
+      .from('registration_fields')
+      .delete()
+      .eq('id', id);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -84,7 +98,9 @@ router.delete('/fields/:id', async (req, res) => {
   }
 });
 
-// GET core field configurations
+// ============================================
+// 🌍 GET core field configurations (public read)
+// ============================================
 router.get('/core-fields', async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
@@ -99,8 +115,10 @@ router.get('/core-fields', async (req, res) => {
   }
 });
 
-// UPDATE a core field configuration (FULL control: label, type, options, etc.)
-router.put('/core-fields/:key', async (req, res) => {
+// ============================================
+// 🔒 UPDATE a core field configuration
+// ============================================
+router.put('/core-fields/:key', requireAdmin, async (req, res) => {
   const { key } = req.params;
   const {
     is_active, is_required, show_in_profile, show_in_view,
