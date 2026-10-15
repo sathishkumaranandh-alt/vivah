@@ -5,7 +5,7 @@ import { requireAdmin } from "../utils/auth.js";
 const router = express.Router();
 
 // ============================================================
-// PLAN PRICING (in ₹) — fallback for hardcoded plans
+// FALLBACK PLANS (in ₹) — used only if DB lookup fails
 // ============================================================
 const PLANS = {
   free: { name: "Free", price: 0, durationDays: null },
@@ -66,7 +66,7 @@ router.get("/user/:userId", async (req, res) => {
 
 // ============================================================
 // POST /subscriptions/create
-// Create or upgrade subscription (simulated payment)
+// ✅ FIXED: Dynamic plan lookup (DB first, then fallback)
 // ============================================================
 router.post("/create", async (req, res) => {
   try {
@@ -76,32 +76,58 @@ router.post("/create", async (req, res) => {
       return res.status(400).json({ error: "Missing user_id or plan" });
     }
 
-    if (!PLANS[plan]) {
+    // 🔧 Dynamic plan lookup — check DB first, then fallback to hardcoded
+    let planConfig = null;
+
+    // Try DB lookup (case-insensitive)
+    const { data: dbPlan } = await supabase
+      .from("membership_plans")
+      .select("name, price, duration_days, permissions")
+      .ilike("name", plan)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (dbPlan) {
+      planConfig = {
+        name: dbPlan.name,
+        price: dbPlan.price || 0,
+        durationDays: dbPlan.duration_days || 30,
+      };
+    } else if (PLANS[plan]) {
+      planConfig = PLANS[plan];
+    } else {
       return res.status(400).json({ error: "Invalid plan" });
     }
 
-    const planConfig = PLANS[plan];
     const now = new Date();
     let expiresAt = null;
 
-    if (planConfig.durationDays) {
+    // Free plan = no expiry; paid plans = duration_days
+    // 9999 days = Lifetime (no expiry set)
+    if (
+      planConfig.durationDays &&
+      planConfig.durationDays !== 9999 &&
+      planConfig.durationDays !== null
+    ) {
       const expDate = new Date(now);
       expDate.setDate(expDate.getDate() + planConfig.durationDays);
       expiresAt = expDate.toISOString();
     }
 
+    // Cancel any existing active subscriptions
     await supabase
       .from("subscriptions")
       .update({ status: "cancelled", updated_at: now.toISOString() })
       .eq("user_id", user_id)
       .eq("status", "active");
 
+    // Create new subscription
     const { data, error } = await supabase
       .from("subscriptions")
       .insert([
         {
           user_id,
-          plan,
+          plan: planConfig.name.toLowerCase(), // ✅ lowercase for consistency
           status: "active",
           amount: planConfig.price,
           started_at: now.toISOString(),
@@ -275,7 +301,9 @@ router.patch("/admin/grant/:userId", requireAdmin, async (req, res) => {
     if (error) throw error;
 
     res.json({
-      message: `Gifted ${PLANS[plan].name} plan for ${days || PLANS[plan].durationDays} days`,
+      message: `Gifted ${PLANS[plan].name} plan for ${
+        days || PLANS[plan].durationDays
+      } days`,
       subscription: data,
     });
   } catch (err) {
