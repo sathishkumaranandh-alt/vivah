@@ -1,11 +1,13 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { requireAdmin } from "../utils/auth.js";
 
 const router = express.Router();
 
 // ============================================================
 // GET /communities
-// Public — only active communities
+// 🌍 PUBLIC — only active communities
+// Used by all users for community dropdown
 // ============================================================
 router.get("/", async (req, res) => {
   try {
@@ -24,10 +26,10 @@ router.get("/", async (req, res) => {
 });
 
 // ============================================================
-// GET /communities/all
-// Admin — includes inactive
+// 🔒 GET /communities/all
+// ADMIN — includes inactive
 // ============================================================
-router.get("/all", async (req, res) => {
+router.get("/all", requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("communities")
@@ -43,11 +45,10 @@ router.get("/all", async (req, res) => {
 });
 
 // ============================================================
-// POST /communities/bulk
-// Add multiple communities from a text list
-// Format: one per line, optional "emoji|Name" or just "Name"
+// 🔒 POST /communities/bulk
+// ADMIN — Add multiple communities from a text list
 // ============================================================
-router.post("/bulk", async (req, res) => {
+router.post("/bulk", requireAdmin, async (req, res) => {
   try {
     const { list } = req.body;
     if (!list || typeof list !== "string") {
@@ -68,7 +69,6 @@ router.post("/bulk", async (req, res) => {
       let emoji = "👥";
       let name = line;
 
-      // Support "emoji|Name" format
       if (line.includes("|")) {
         const parts = line.split("|").map((p) => p.trim());
         if (parts.length === 2) {
@@ -100,13 +100,11 @@ router.post("/bulk", async (req, res) => {
       return res.status(400).json({ error: "No valid community names found" });
     }
 
-    // Get existing slugs
     const { data: existing } = await supabase
       .from("communities")
       .select("slug");
     const existingSlugs = new Set((existing || []).map((c) => c.slug));
 
-    // Deduplicate within the input
     const seen = new Set();
     const toInsert = [];
     let skipped = 0;
@@ -148,10 +146,10 @@ router.post("/bulk", async (req, res) => {
 });
 
 // ============================================================
-// POST /communities
-// Create one community
+// 🔒 POST /communities
+// ADMIN — Create one community
 // ============================================================
-router.post("/", async (req, res) => {
+router.post("/", requireAdmin, async (req, res) => {
   try {
     const { slug, name, emoji, color, description, display_order } = req.body;
 
@@ -168,7 +166,9 @@ router.post("/", async (req, res) => {
       .maybeSingle();
 
     if (existing) {
-      return res.status(400).json({ error: "A community with this slug already exists" });
+      return res
+        .status(400)
+        .json({ error: "A community with this slug already exists" });
     }
 
     const { data, error } = await supabase
@@ -195,14 +195,16 @@ router.post("/", async (req, res) => {
 });
 
 // ============================================================
-// PATCH /communities/:id
+// 🔒 PATCH /communities/:id
+// ADMIN — Update
 // ============================================================
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
     delete updates.id;
     delete updates.created_at;
+    delete updates.admin_id; // Don't store admin_id in DB
 
     if (updates.slug) {
       updates.slug = updates.slug.toLowerCase().trim().replace(/\s+/g, "_");
@@ -227,13 +229,17 @@ router.patch("/:id", async (req, res) => {
 });
 
 // ============================================================
-// PATCH /communities/:id/toggle
+// 🔒 PATCH /communities/:id/toggle
+// ADMIN — Activate/Deactivate
 // ============================================================
-router.patch("/:id/toggle", async (req, res) => {
+router.patch("/:id/toggle", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { data: current, error: fetchError } = await supabase
-      .from("communities").select("is_active").eq("id", id).single();
+      .from("communities")
+      .select("is_active")
+      .eq("id", id)
+      .single();
     if (fetchError) throw fetchError;
 
     const { data, error } = await supabase
@@ -244,7 +250,10 @@ router.patch("/:id/toggle", async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json({ message: data.is_active ? "Activated" : "Deactivated", community: data });
+    res.json({
+      message: data.is_active ? "Activated" : "Deactivated",
+      community: data,
+    });
   } catch (err) {
     console.error("Toggle community error:", err);
     res.status(500).json({ error: err.message });
@@ -252,16 +261,21 @@ router.patch("/:id/toggle", async (req, res) => {
 });
 
 // ============================================================
-// DELETE /communities/:id
+// 🔒 DELETE /communities/:id
+// ADMIN — Delete (only if no users in this community)
 // ============================================================
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
     const { data: community } = await supabase
-      .from("communities").select("slug, name").eq("id", id).single();
+      .from("communities")
+      .select("slug, name")
+      .eq("id", id)
+      .single();
 
-    if (!community) return res.status(404).json({ error: "Community not found" });
+    if (!community)
+      return res.status(404).json({ error: "Community not found" });
 
     const { count: userCount } = await supabase
       .from("users")
