@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 
 // Route Imports
 import authRoutes from './routes/auth.js';
@@ -28,11 +29,91 @@ import blockRoutes from './routes/blocks.js';
 dotenv.config();
 const app = express();
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// ============================================
+// 1. CORS — Restrict to known origins
+// ============================================
+const ALLOWED_ORIGINS = [
+  'https://vivaha-frontend.vercel.app',
+  'https://vivaha-frontend-6756.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:5173',
+];
 
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman)
+      if (!origin) return callback(null, true);
+
+      // Check exact match or vercel preview pattern
+      const isAllowed =
+        ALLOWED_ORIGINS.includes(origin) ||
+        /^https:\/\/vivaha-frontend-[a-z0-9]+\.vercel\.app$/.test(origin);
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.warn('🚫 CORS blocked:', origin);
+        callback(null, false);
+      }
+    },
+    credentials: true,
+  })
+);
+
+// ============================================
+// 2. Body size limit
+// ============================================
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+// ============================================
+// 3. Rate Limiters
+// ============================================
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const strictLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  message: { error: 'Too many requests. Try again in a minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: 'Too many login attempts. Try again in 5 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const heartbeatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 70,
+  message: { error: 'Too many heartbeats' },
+});
+
+// Apply limiters
+app.use('/auth', authLimiter);
+app.use('/messages/heartbeat', heartbeatLimiter);
+app.use('/interests', strictLimiter);
+app.use('/messages', strictLimiter);
+app.use('/photo-requests', strictLimiter);
+app.use('/contact-requests', strictLimiter);
+app.use('/reports', strictLimiter);
+app.use('/boost', strictLimiter);
+app.use(generalLimiter);
+
+// ============================================
 // Routes
+// ============================================
 app.use('/auth', authRoutes);
 app.use('/profile', profileRoutes);
 app.use('/messages', messageRoutes);
@@ -54,22 +135,43 @@ app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
 app.use('/telegram', telegramRoutes);
 app.use('/blocks', blockRoutes);
-
-// Settings routes (part of audit.js)
 app.use('/', auditRoutes);
 
+// ============================================
 // Health check
+// ============================================
 app.get('/', (req, res) => {
-  res.json({ status: 'Vivaha backend running', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'Vivaha backend running',
+    timestamp: new Date().toISOString(),
+  });
 });
 
-// Error handler
+// ============================================
+// 4. Error Handler — No internal info leak
+// ============================================
 app.use((err, req, res, next) => {
-  console.error("Server error:", err);
-  res.status(500).json({ error: err.message });
+  console.error('❌ Server error:', {
+    message: err.message,
+    path: req.path,
+    method: req.method,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+  });
+
+  const status = err.status || 500;
+  res.status(status).json({
+    error:
+      status === 500
+        ? 'Something went wrong. Please try again.'
+        : err.message || 'Request failed',
+  });
 });
 
+// ============================================
+// Start server
+// ============================================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
+  console.log(`✅ Backend running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'production'}`);
 });
