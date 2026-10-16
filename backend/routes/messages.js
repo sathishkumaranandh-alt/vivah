@@ -1,6 +1,7 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
 import { sendTelegram } from '../utils/telegram.js';
+import { requireAuth } from "../utils/auth.js";
 
 const router = express.Router();
 
@@ -101,7 +102,7 @@ router.get("/conversations/:userId", async (req, res) => {
       connectedIds.add(c.sender_id === userId ? c.receiver_id : c.sender_id);
     });
 
-    // ⭐ Exclude users who are blocked (either direction)
+    // ⭐ Exclude blocked users
     const { data: blocks } = await supabase
       .from("blocked_users")
       .select("blocker_id, blocked_id")
@@ -224,11 +225,13 @@ router.get("/chat/:user1/:user2", async (req, res) => {
 });
 
 // ============================================
-// 5. POST /messages/send
+// 5. 🔒 POST /messages/send
+// Uses req.userId from verified JWT
 // ============================================
-router.post("/send", async (req, res) => {
+router.post("/send", requireAuth, async (req, res) => {
   try {
-    const { sender_id, receiver_id, text, image_url, message_type } = req.body;
+    const { receiver_id, text, image_url, message_type } = req.body;
+    const sender_id = req.userId; // 🔒 From verified token
 
     if (!sender_id || !receiver_id) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -248,7 +251,7 @@ router.post("/send", async (req, res) => {
       });
     }
 
-    // ⭐ Block check — Blocked users cannot message each other
+    // ⭐ Block check
     const blockCheck = await isBlockedBetween(sender_id, receiver_id);
     if (blockCheck.blocked) {
       return res.status(403).json({
@@ -377,11 +380,12 @@ router.get("/typing-status/:partnerId/:userId", async (req, res) => {
 });
 
 // ============================================
-// 8. POST /messages/heartbeat
+// 8. 🔒 POST /messages/heartbeat
+// Uses req.userId from verified JWT
 // ============================================
-router.post("/heartbeat", async (req, res) => {
+router.post("/heartbeat", requireAuth, async (req, res) => {
   try {
-    const { user_id } = req.body;
+    const user_id = req.userId; // 🔒 From token
     if (!user_id) return res.status(400).json({ error: "Missing user_id" });
 
     await supabase
