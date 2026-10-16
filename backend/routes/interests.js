@@ -1,13 +1,14 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
 import { sendTelegram } from "../utils/telegram.js";
+import { requireAuth } from "../utils/auth.js";
 
 const router = express.Router();
 
 // ============================================================
-// PATCH /interests/respond/:interestId
+// 🔒 PATCH /interests/respond/:interestId
 // ============================================================
-router.patch("/respond/:interestId", async (req, res) => {
+router.patch("/respond/:interestId", requireAuth, async (req, res) => {
   try {
     const { interestId } = req.params;
     const { status, reason } = req.body;
@@ -58,7 +59,6 @@ router.patch("/respond/:interestId", async (req, res) => {
         },
       ]);
 
-      // 📱 Telegram notification
       const { data: sender } = await supabase
         .from("users")
         .select("telegram_chat_id, telegram_opt_in")
@@ -218,11 +218,13 @@ router.get("/status/:userId/:otherId", async (req, res) => {
 });
 
 // ============================================================
-// POST /interests/send
+// 🔒 POST /interests/send
 // ============================================================
-router.post("/send", async (req, res) => {
+router.post("/send", requireAuth, async (req, res) => {
   try {
-    const { sender_id, receiver_id, message } = req.body;
+    const { receiver_id, message } = req.body;
+    const sender_id = req.userId; // 🔒 From JWT/verified token
+
     if (!sender_id || !receiver_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
@@ -294,7 +296,6 @@ router.post("/send", async (req, res) => {
         },
       ]);
 
-      // 📱 Telegram notification
       const { data: receiver } = await supabase
         .from("users")
         .select("telegram_chat_id, telegram_opt_in")
@@ -320,11 +321,13 @@ router.post("/send", async (req, res) => {
 });
 
 // ============================================================
-// POST /interests/shortlist
+// 🔒 POST /interests/shortlist
 // ============================================================
-router.post("/shortlist", async (req, res) => {
+router.post("/shortlist", requireAuth, async (req, res) => {
   try {
-    const { user_id, shortlisted_user_id } = req.body;
+    const { shortlisted_user_id } = req.body;
+    const user_id = req.userId; // 🔒 From token
+
     if (!user_id || !shortlisted_user_id) {
       return res.status(400).json({ error: "Missing fields" });
     }
