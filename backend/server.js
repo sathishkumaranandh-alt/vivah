@@ -33,11 +33,10 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ============================================
-// 1. CORS
+// 1. CORS — Allow Main URL + Vercel Previews + Localhost
 // ============================================
 const ALLOWED_ORIGINS = [
   'https://vivaha-frontend.vercel.app',
-  'https://vivaha-frontend-6756.vercel.app',
   'http://localhost:3000',
   'http://localhost:5173',
 ];
@@ -45,17 +44,20 @@ const ALLOWED_ORIGINS = [
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman)
       if (!origin) return callback(null, true);
 
       const isAllowed =
         ALLOWED_ORIGINS.includes(origin) ||
-        /^https:\/\/vivaha-frontend-[a-z0-9]+\.vercel\.app$/.test(origin);
+        // ✅ Allow ALL Vercel preview deployments for this project
+        (origin.includes('vivaha-frontend') && origin.endsWith('.vercel.app')) ||
+        origin.includes('localhost');
 
       if (isAllowed) {
         callback(null, true);
       } else {
         console.warn('🚫 CORS blocked:', origin);
-        callback(null, false);
+        callback(new Error('Not allowed by CORS'));
       }
     },
     credentials: true,
@@ -69,54 +71,48 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ============================================
-// 3. Rate Limiters — Different per route type
+// 3. Rate Limiters
 // ============================================
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 300, // Was 100 — Chat polling needs more
+  max: 300,
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method === 'GET', // Skip GET requests (polling)
+  skip: (req) => req.method === 'GET',
 });
 
-// Sensitive user actions (send interest, message, request)
 const actionLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 40, // Was 15 — More breathing room
+  max: 40,
   message: { error: 'Too many actions. Please wait a minute.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// Login/signup
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10, // Was 5
+  max: 10,
   message: { error: 'Too many login attempts. Try again in a minute.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// Heartbeat (users send every 60s + tab switches)
 const heartbeatLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 150, // Was 70
+  max: 150,
   message: { error: 'Too many heartbeats' },
 });
 
-// Polling endpoints — very generous
 const pollingLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 400, // For chat/notifications polling
+  max: 400,
   message: { error: 'Polling too fast' },
 });
 
 // ============================================
-// Apply limiters (order matters!)
+// Apply limiters
 // ============================================
-
-// Specific endpoints first
 app.use('/messages/heartbeat', heartbeatLimiter);
 
 // Polling GETs — generous
@@ -201,7 +197,7 @@ app.use((err, req, res, next) => {
 // ============================================
 // Start server
 // ============================================
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'production'}`);
