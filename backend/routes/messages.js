@@ -2,6 +2,7 @@ import express from "express";
 import supabase from "../supabaseClient.js";
 import { sendTelegram } from '../utils/telegram.js';
 import { requireAuth } from "../utils/auth.js";
+import { validate, messageSchema } from '../utils/validators.js';
 
 const router = express.Router();
 
@@ -228,7 +229,7 @@ router.get("/chat/:user1/:user2", async (req, res) => {
 // 5. 🔒 POST /messages/send
 // Uses req.userId from verified JWT
 // ============================================
-router.post("/send", requireAuth, async (req, res) => {
+router.post("/send", requireAuth, validate(messageSchema), async (req, res) => {
   try {
     const { receiver_id, text, image_url, message_type } = req.body;
     const sender_id = req.userId; // 🔒 From verified token
