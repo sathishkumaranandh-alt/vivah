@@ -1,12 +1,9 @@
 // backend/utils/telegram.js
-
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API_URL = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
 
-/**
- * Send Telegram message with Timeout and Retry Logic
- */
-async function sendTelegramMessage(chatId, text, retries = 3) {
+// Ungha project la 'sendTelegram' nu import panranga, so adhe name la export panrom
+export const sendTelegram = async (chatId, text, retries = 3) => {
   if (!TELEGRAM_BOT_TOKEN) {
     console.error("❌ TELEGRAM_BOT_TOKEN is missing in env variables");
     return false;
@@ -18,7 +15,7 @@ async function sendTelegramMessage(chatId, text, retries = 3) {
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      // 5 seconds timeout setup
+      // 5 seconds timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
@@ -28,33 +25,32 @@ async function sendTelegramMessage(chatId, text, retries = 3) {
         body: JSON.stringify({
           chat_id: chatId,
           text: text,
-          parse_mode: 'HTML', // Enable HTML formatting
-          disable_web_page_preview: true // Prevents link previews from breaking layout
+          parse_mode: 'HTML',
+          disable_web_page_preview: true
         }),
         signal: controller.signal
       });
 
-      clearTimeout(timeoutId); // Clear timeout if request finishes
+      clearTimeout(timeoutId);
 
       const data = await response.json();
 
       if (data.ok) {
-        console.log(`✅ Telegram message sent successfully to ${chatId}`);
+        console.log(`✅ Telegram message sent to ${chatId}`);
         return true;
       } else {
-        // If Telegram rejects the request (e.g., user blocked bot)
         console.error(`⚠️ Telegram API Error (Attempt ${attempt}):`, data.description);
-        if (data.error_code === 403) return false; // Don't retry if user blocked bot
+        // User bot-a block pannirundha, retry panna vendaam
+        if (data.error_code === 403) return false; 
       }
     } catch (error) {
-      // Handle Timeout or Network error
       if (error.name === 'AbortError') {
         console.error(`⏳ Telegram Timeout (Attempt ${attempt}/${retries}). Retrying...`);
       } else {
         console.error(`❌ Telegram Fetch Error (Attempt ${attempt}):`, error.message);
       }
 
-      // Wait for 2 seconds before retrying
+      // Retry-ku munnadi 2 seconds wait panrom
       if (attempt < retries) {
         await new Promise(resolve => setTimeout(resolve, 2000));
       } else {
@@ -64,6 +60,4 @@ async function sendTelegramMessage(chatId, text, retries = 3) {
     }
   }
   return false;
-}
-
-module.exports = { sendTelegramMessage };
+};
