@@ -2,6 +2,7 @@ import express from "express";
 import supabase from "../supabaseClient.js";
 import { sendTelegram } from "../utils/telegram.js";
 import { requireAuth } from "../utils/auth.js";
+import { validate, interestSchema } from '../utils/validators.js';
 
 const router = express.Router();
 
@@ -220,7 +221,7 @@ router.get("/status/:userId/:otherId", async (req, res) => {
 // ============================================================
 // 🔒 POST /interests/send
 // ============================================================
-router.post("/send", requireAuth, async (req, res) => {
+router.post("/send", requireAuth, validate(interestSchema), async (req, res) => {
   try {
     const { receiver_id, message } = req.body;
     const sender_id = req.userId; // 🔒 From JWT/verified token
