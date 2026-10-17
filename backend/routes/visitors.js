@@ -2,6 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
+import { requireAuth } from '../utils/auth.js'; // 🔒 Added JWT Auth
 
 dotenv.config();
 const router = express.Router();
@@ -25,7 +26,7 @@ function perm(v) {
 }
 
 // ============================================
-// HELPER FUNCTIONS
+// HELPER FUNCTIONS (Unchanged from Old Code)
 // ============================================
 async function getActiveSubscription(userId) {
   if (!userId) return null;
@@ -119,15 +120,16 @@ async function hasInterestOrMatch(user1, user2) {
 }
 
 // ============================================
-// POST /visitors/log - Log a profile view + Telegram notify
+// 🔒 POST /visitors/log - Log a profile view + Telegram notify
 // ============================================
-router.post('/log', async (req, res) => {
+router.post('/log', requireAuth, async (req, res) => {
   console.log("--- STARTING VISITOR NOTIFICATION ---");
-  const { viewerId, viewedId } = req.body;
+  const viewerId = req.userId; // 🔒 Secure from JWT
+  const { viewedId } = req.body;
 
-  if (!viewerId || !viewedId) {
-    console.log("Missing IDs in request body");
-    return res.status(400).json({ error: "Missing IDs" });
+  if (!viewedId) {
+    console.log("Missing viewedId in request body");
+    return res.status(400).json({ error: "Missing viewedId" });
   }
   if (viewerId === viewedId) {
     console.log("Self view ignored");
@@ -149,6 +151,9 @@ router.post('/log', async (req, res) => {
       return res.json({ success: true, notified: false, reason: "Not a paid member" });
     }
 
+    // Fetch viewer name for the notification
+    const { data: viewer } = await supabaseAdmin.from('users').select('name').eq('id', viewerId).single();
+
     const { data: owner } = await supabaseAdmin
       .from('users')
       .select('telegram_chat_id, telegram_opt_in')
@@ -158,7 +163,7 @@ router.post('/log', async (req, res) => {
     if (owner?.telegram_opt_in && owner?.telegram_chat_id) {
       const tgResult = await sendTelegram(
         owner.telegram_chat_id,
-        `👀 <b>Profile View</b>\n\nSomeone just viewed your profile.\n\nTap to see who → https://vivaha-frontend.vercel.app/visitors`
+        `👀 <b>Profile View</b>\n\n<b>${viewer?.name || "Someone"}</b> just viewed your profile.\n\nTap to see who → https://vivaha-frontend.vercel.app/visitors`
       );
       console.log("TELEGRAM API RESULT:", tgResult);
       console.log("--- END VISITOR NOTIFICATION ---");
@@ -177,10 +182,11 @@ router.post('/log', async (req, res) => {
 });
 
 // ============================================
-// GET /visitors/list/:userId - Visitors list with privacy rules
+// 🔒 GET /visitors/list - Visitors list with privacy rules
 // ============================================
-router.get('/list/:userId', async (req, res) => {
-  const { userId } = req.params;
+router.get('/list', requireAuth, async (req, res) => {
+  const userId = req.userId; // 🔒 Secure from JWT
+  
   try {
     const { data: views, error: viewError } = await supabaseAdmin
       .from('profile_views')
@@ -215,7 +221,6 @@ router.get('/list/:userId', async (req, res) => {
     // PRIVACY RULES APPLICATION
     // ============================================
 
-    // userId = person whose visitor list is being viewed (e.g., Kala)
     const listViewerIsPaid = await isPaidUser(userId);
     const listViewerPerms = await getViewerPermissions(userId);
     const listViewerCanViewPaid = listViewerIsPaid || perm(listViewerPerms.can_view_paid_profiles);
@@ -232,7 +237,7 @@ router.get('/list/:userId', async (req, res) => {
       (subs || []).forEach(s => paidVisitorIds.add(s.user_id));
     }
 
-    // Check photo approvals: does the list viewer have photo approval from each visitor?
+    // Check photo approvals
     const approvedPhotoIds = new Set();
     if (viewerIds.length > 0) {
       const { data: pa } = await supabaseAdmin
@@ -241,8 +246,7 @@ router.get('/list/:userId', async (req, res) => {
       (pa || []).forEach(a => approvedPhotoIds.add(a.owner_id));
     }
 
-    // Check mutual interest/match between userId and each visitor
-    // Used for 'matches' photo_privacy setting
+    // Check mutual interest/match
     const matchContext = {};
     if (viewerIds.length > 0) {
       const { data: interests } = await supabaseAdmin
@@ -273,17 +277,14 @@ router.get('/list/:userId', async (req, res) => {
       let shouldBlur = false;
       if (!isSelf) {
         if (freeViewingPaid) {
-          // Paid visitor + Free list viewer = Paid Member Lock
           shouldBlur = true;
         } else if (hasPhotoApproved) {
           shouldBlur = false;
         } else if (listViewerCanSeeFullPhoto && visitorIsPaid) {
-          // Paid + Paid + see_full_photo = bypass privacy
           shouldBlur = false;
         } else if (user.photo_privacy === 'private') {
           shouldBlur = true;
         } else if (user.photo_privacy === 'matches' && !matchContext[user.id]) {
-          // Matches privacy: blur if NO mutual interest
           shouldBlur = true;
         }
       }
