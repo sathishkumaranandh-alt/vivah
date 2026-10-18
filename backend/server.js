@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet'; // 🛡️ Added for security headers
 
 // Route Imports
 import authRoutes from './routes/auth.js';
@@ -29,11 +30,16 @@ import blockRoutes from './routes/blocks.js';
 dotenv.config();
 const app = express();
 
-// Trust Render's proxy (needed for accurate IP in rate limit)
+// Trust Render's proxy
 app.set('trust proxy', 1);
 
 // ============================================
-// 1. CORS — Allow Main URL + Vercel Previews + Localhost
+// 🛡️ 1. SECURITY HEADERS (Helmet)
+// ============================================
+app.use(helmet());
+
+// ============================================
+// 🛡️ 2. STRICT CORS
 // ============================================
 const ALLOWED_ORIGINS = [
   'https://vivaha-frontend.vercel.app',
@@ -44,16 +50,13 @@ const ALLOWED_ORIGINS = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, Postman)
       if (!origin) return callback(null, true);
 
-      const isAllowed =
-        ALLOWED_ORIGINS.includes(origin) ||
-        // ✅ Allow ALL Vercel preview deployments for this project
-        (origin.includes('vivaha-frontend') && origin.endsWith('.vercel.app')) ||
-        origin.includes('localhost');
+      // 🔒 Strict check for localhost and Vercel
+      const isVercelPreview = origin.includes('vivaha-frontend') && origin.endsWith('.vercel.app');
+      const isExactLocalhost = origin === 'http://localhost:3000' || origin === 'http://localhost:5173';
 
-      if (isAllowed) {
+      if (ALLOWED_ORIGINS.includes(origin) || isVercelPreview || (process.env.NODE_ENV === 'development' && isExactLocalhost)) {
         callback(null, true);
       } else {
         console.warn('🚫 CORS blocked:', origin);
@@ -65,13 +68,13 @@ app.use(
 );
 
 // ============================================
-// 2. Body size limit
+// 3. Body size limit
 // ============================================
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ============================================
-// 3. Rate Limiters
+// 🛡️ 4. RATE LIMITERS (Fixed GET scraping)
 // ============================================
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -79,23 +82,19 @@ const generalLimiter = rateLimit({
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method === 'GET',
+  // Removed 'skip: GET' to prevent data scraping
 });
 
 const actionLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 40,
   message: { error: 'Too many actions. Please wait a minute.' },
-  standardHeaders: true,
-  legacyHeaders: false,
 });
 
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
   message: { error: 'Too many login attempts. Try again in a minute.' },
-  standardHeaders: true,
-  legacyHeaders: false,
 });
 
 const heartbeatLimiter = rateLimit({
@@ -110,19 +109,14 @@ const pollingLimiter = rateLimit({
   message: { error: 'Polling too fast' },
 });
 
-// ============================================
 // Apply limiters
-// ============================================
 app.use('/messages/heartbeat', heartbeatLimiter);
-
-// Polling GETs — generous
 app.use('/messages/chat', pollingLimiter);
 app.use('/messages/typing-status', pollingLimiter);
 app.use('/messages/conversations', pollingLimiter);
 app.use('/messages/unread', pollingLimiter);
 app.use('/notifications', pollingLimiter);
 
-// Sensitive POST actions — strict
 app.use('/messages/send', actionLimiter);
 app.use('/interests/send', actionLimiter);
 app.use('/interests/respond', actionLimiter);
@@ -132,21 +126,18 @@ app.use('/contact-requests/request', actionLimiter);
 app.use('/reports', actionLimiter);
 app.use('/boost', actionLimiter);
 
-// Auth — strictest
 app.use('/auth', authLimiter);
-
-// General fallback
-app.use(generalLimiter);
+app.use(generalLimiter); // Applies to everything else
 
 // ============================================
-// Routes
+// 5. Routes
 // ============================================
 app.use('/auth', authRoutes);
 app.use('/profile', profileRoutes);
 app.use('/messages', messageRoutes);
 app.use('/subscriptions', subscriptionRoutes);
 app.use('/reports', reportRoutes);
-app.use('/audit', auditRoutes);
+app.use('/audit', auditRoutes); // 🔒 Fixed duplicate mount
 app.use('/interests', interestRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/photos', photoRoutes);
@@ -162,7 +153,6 @@ app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
 app.use('/telegram', telegramRoutes);
 app.use('/blocks', blockRoutes);
-app.use('/', auditRoutes);
 
 // ============================================
 // Health check
@@ -187,10 +177,7 @@ app.use((err, req, res, next) => {
 
   const status = err.status || 500;
   res.status(status).json({
-    error:
-      status === 500
-        ? 'Something went wrong. Please try again.'
-        : err.message || 'Request failed',
+    error: status === 500 ? 'Something went wrong. Please try again.' : err.message || 'Request failed',
   });
 });
 
