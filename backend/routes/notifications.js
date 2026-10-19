@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { requireAuth } from "../utils/auth.js"; // 🛡️ Added Security
 
 const router = express.Router();
 
@@ -32,9 +33,13 @@ router.post("/create", async (req, res) => {
 // GET /notifications/:userId
 // List notifications for user
 // ============================================================
-router.get("/:userId", async (req, res) => {
+router.get("/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+    
+    // 🛡️ Security: You can only view YOUR OWN notifications
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const limit = parseInt(req.query.limit) || 30;
 
     const { data, error } = await supabase
@@ -56,9 +61,12 @@ router.get("/:userId", async (req, res) => {
 // GET /notifications/count/:userId
 // Unread count (for bell badge)
 // ============================================================
-router.get("/count/:userId", async (req, res) => {
+router.get("/count/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+    
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { count, error } = await supabase
       .from("notifications")
       .select("*", { count: "exact", head: true })
@@ -77,9 +85,14 @@ router.get("/count/:userId", async (req, res) => {
 // PATCH /notifications/read/:id
 // Mark one notification as read
 // ============================================================
-router.patch("/read/:id", async (req, res) => {
+router.patch("/read/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // 🛡️ Security: Verify ownership before marking read
+    const { data: notif } = await supabase.from("notifications").select("user_id").eq("id", id).single();
+    if (!notif || notif.user_id !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { error } = await supabase
       .from("notifications")
       .update({ is_read: true })
@@ -96,9 +109,12 @@ router.patch("/read/:id", async (req, res) => {
 // PATCH /notifications/read-all/:userId
 // Mark all as read
 // ============================================================
-router.patch("/read-all/:userId", async (req, res) => {
+router.patch("/read-all/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+    
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { error } = await supabase
       .from("notifications")
       .update({ is_read: true })
@@ -115,9 +131,14 @@ router.patch("/read-all/:userId", async (req, res) => {
 // ============================================================
 // DELETE /notifications/:id
 // ============================================================
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // 🛡️ Security: Verify ownership before deleting
+    const { data: notif } = await supabase.from("notifications").select("user_id").eq("id", id).single();
+    if (!notif || notif.user_id !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { error } = await supabase.from("notifications").delete().eq("id", id);
     if (error) throw error;
     res.json({ message: "Deleted" });
@@ -125,13 +146,17 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // ============================================================
 // PATCH /notifications/read-by-actor/:userId/:actorId
 // Mark ALL notifications from a specific actor as read
 // ============================================================
-router.patch("/read-by-actor/:userId/:actorId", async (req, res) => {
+router.patch("/read-by-actor/:userId/:actorId", requireAuth, async (req, res) => {
   try {
     const { userId, actorId } = req.params;
+    
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { error } = await supabase
       .from("notifications")
       .update({ is_read: true })
@@ -145,4 +170,5 @@ router.patch("/read-by-actor/:userId/:actorId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 export default router;
