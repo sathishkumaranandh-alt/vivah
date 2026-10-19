@@ -611,5 +611,36 @@ router.delete('/admin/users/:id', requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+// ============================================
+// 7. DELETE MY ACCOUNT (🔒 Auth Required)
+// ============================================
+router.delete('/me', requireAuth, async (req, res) => {
+  const userId = req.userId;
 
+  try {
+    // 1. Delete user's related data (order matters to avoid FK constraint errors)
+    await supabaseAdmin.from('messages').delete().or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+    await supabaseAdmin.from('interests').delete().or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+    await supabaseAdmin.from('shortlists').delete().or(`user_id.eq.${userId},shortlisted_user_id.eq.${userId}`);
+    await supabaseAdmin.from('notifications').delete().or(`user_id.eq.${userId},actor_id.eq.${userId}`);
+    await supabaseAdmin.from('blocked_users').delete().or(`blocker_id.eq.${userId},blocked_id.eq.${userId}`);
+    await supabaseAdmin.from('photo_requests').delete().or(`requester_id.eq.${userId},owner_id.eq.${userId}`);
+    await supabaseAdmin.from('contact_requests').delete().or(`requester_id.eq.${userId},owner_id.eq.${userId}`);
+    await supabaseAdmin.from('profile_views').delete().or(`viewer_id.eq.${userId},viewed_id.eq.${userId}`);
+    await supabaseAdmin.from('user_photos').delete().eq('user_id', userId);
+    await supabaseAdmin.from('typing_status').delete().eq('user_id', userId);
+
+    // 2. Delete user row
+    await supabaseAdmin.from('users').delete().eq('id', userId);
+
+    // 3. Delete from Supabase Auth
+    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (authError) throw authError;
+
+    res.json({ success: true, message: "Account deleted successfully" });
+  } catch (err) {
+    console.error("Delete account error:", err);
+    res.status(500).json({ error: "Failed to delete account. Please contact support." });
+  }
+});
 export default router;
