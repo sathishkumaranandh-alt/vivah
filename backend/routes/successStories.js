@@ -1,7 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { requireAdmin } from '../utils/auth.js';
+import { requireAdmin, requireAuth } from '../utils/auth.js'; // 🛡️ Added requireAuth
 
 dotenv.config();
 const router = express.Router();
@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
 // ============================================
 // 🔒 ADMIN — GET all stories (approved + not)
 // ============================================
-router.get('/admin/all', requireAdmin, async (req, res) => {
+router.get('/admin/all', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('success_stories')
@@ -53,7 +53,7 @@ router.get('/admin/all', requireAdmin, async (req, res) => {
 // ============================================
 // 🔒 CREATE — New story
 // ============================================
-router.post('/', requireAdmin, async (req, res) => {
+router.post('/', requireAuth, requireAdmin, async (req, res) => {
   const {
     couple_names,
     story,
@@ -97,7 +97,7 @@ router.post('/', requireAdmin, async (req, res) => {
 // ============================================
 // 🔒 UPDATE — Edit existing story
 // ============================================
-router.put('/:id', requireAdmin, async (req, res) => {
+router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const {
     couple_names,
@@ -137,7 +137,7 @@ router.put('/:id', requireAdmin, async (req, res) => {
 // ============================================
 // 🔒 DELETE — Remove story
 // ============================================
-router.delete('/:id', requireAdmin, async (req, res) => {
+router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { error } = await supabaseAdmin
