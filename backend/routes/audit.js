@@ -1,22 +1,23 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { requireAdmin } from '../utils/auth.js'; // 🛡️ Added Auth
 
 const router = express.Router();
 
 // ============================================================
-// POST /audit/log
-// Record an admin action
+// POST /audit/log (🔒 Admin Only)
 // ============================================================
-router.post("/log", async (req, res) => {
+router.post("/log", requireAdmin, async (req, res) => {
   try {
-    const { admin_id, admin_email, action, target_type, target_id, target_name, details } = req.body;
+    const { admin_email, action, target_type, target_id, target_name, details } = req.body;
+    const admin_id = req.userId; // 🔒 Use JWT instead of body
 
     if (!action) return res.status(400).json({ error: "action is required" });
 
     const { data, error } = await supabase
       .from("audit_logs")
       .insert([{
-        admin_id: admin_id || null,
+        admin_id,
         admin_email: admin_email || null,
         action,
         target_type: target_type || null,
@@ -36,10 +37,9 @@ router.post("/log", async (req, res) => {
 });
 
 // ============================================================
-// GET /audit/all
-// Get all audit logs (newest first)
+// GET /audit/all (🔒 Admin Only)
 // ============================================================
-router.get("/all", async (req, res) => {
+router.get("/all", requireAdmin, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const { data, error } = await supabase
@@ -57,10 +57,9 @@ router.get("/all", async (req, res) => {
 });
 
 // ============================================================
-// GET /audit/recent
-// Get recent 20 logs for dashboard widget
+// GET /audit/recent (🔒 Admin Only)
 // ============================================================
-router.get("/recent", async (req, res) => {
+router.get("/recent", requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("audit_logs")
@@ -77,10 +76,9 @@ router.get("/recent", async (req, res) => {
 });
 
 // ============================================================
-// DELETE /audit/clear
-// Clear all audit logs (admin only)
+// DELETE /audit/clear (🔒 Admin Only)
 // ============================================================
-router.delete("/clear", async (req, res) => {
+router.delete("/clear", requireAdmin, async (req, res) => {
   try {
     const { error } = await supabase
       .from("audit_logs")
@@ -96,8 +94,7 @@ router.delete("/clear", async (req, res) => {
 });
 
 // ============================================================
-// GET /settings
-// Get all site settings as a key-value object
+// GET /settings (🌐 Public - Frontend needs this)
 // ============================================================
 router.get("/settings", async (req, res) => {
   try {
@@ -114,11 +111,9 @@ router.get("/settings", async (req, res) => {
 });
 
 // ============================================================
-// PUT /settings
-// Update site settings
-// Body: { settings: { key1: value1, key2: value2, ... } }
+// PUT /settings (🔒 Admin Only)
 // ============================================================
-router.put("/settings", async (req, res) => {
+router.put("/settings", requireAdmin, async (req, res) => {
   try {
     const { settings } = req.body;
     if (!settings || typeof settings !== "object") {
