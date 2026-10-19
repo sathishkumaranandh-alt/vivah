@@ -7,7 +7,7 @@ import { validate, interestSchema } from '../utils/validators.js';
 const router = express.Router();
 
 // ============================================================
-// 🔒 PATCH /interests/respond/:interestId
+// 🔒 PATCH /interests/respond/:interestId (Secured)
 // ============================================================
 router.patch("/respond/:interestId", requireAuth, async (req, res) => {
   try {
@@ -16,6 +16,22 @@ router.patch("/respond/:interestId", requireAuth, async (req, res) => {
 
     if (!["accepted", "declined"].includes(status)) {
       return res.status(400).json({ error: "Invalid status" });
+    }
+
+    // 🛡️ Security: Fetch first to check who owns this interest
+    const { data: interestCheck, error: fetchErr } = await supabase
+      .from("interests")
+      .select("receiver_id")
+      .eq("id", interestId)
+      .single();
+
+    if (fetchErr || !interestCheck) {
+      return res.status(404).json({ error: "Interest not found" });
+    }
+
+    // Only the receiver can accept/decline the interest
+    if (interestCheck.receiver_id !== req.userId) {
+      return res.status(403).json({ error: "Forbidden: You are not the receiver of this interest" });
     }
 
     const updateData = {
@@ -97,11 +113,15 @@ router.patch("/respond/:interestId", requireAuth, async (req, res) => {
 });
 
 // ============================================================
-// GET /interests/received/:userId
+// GET /interests/received/:userId (Secured)
 // ============================================================
-router.get("/received/:userId", async (req, res) => {
+router.get("/received/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // 🛡️ Security: You can only view YOUR OWN received interests
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { status } = req.query;
     let query = supabase
       .from("interests")
@@ -138,11 +158,15 @@ router.get("/received/:userId", async (req, res) => {
 });
 
 // ============================================================
-// GET /interests/sent/:userId
+// GET /interests/sent/:userId (Secured)
 // ============================================================
-router.get("/sent/:userId", async (req, res) => {
+router.get("/sent/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // 🛡️ Security: You can only view YOUR OWN sent interests
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { status } = req.query;
     let query = supabase
       .from("interests")
@@ -179,11 +203,15 @@ router.get("/sent/:userId", async (req, res) => {
 });
 
 // ============================================================
-// GET /interests/count/:userId
+// GET /interests/count/:userId (Secured)
 // ============================================================
-router.get("/count/:userId", async (req, res) => {
+router.get("/count/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // 🛡️ Security: You can only view YOUR OWN count
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { count, error } = await supabase
       .from("interests")
       .select("*", { count: "exact", head: true })
@@ -197,11 +225,15 @@ router.get("/count/:userId", async (req, res) => {
 });
 
 // ============================================================
-// GET /interests/status/:userId/:otherId
+// GET /interests/status/:userId/:otherId (Secured)
 // ============================================================
-router.get("/status/:userId/:otherId", async (req, res) => {
+router.get("/status/:userId/:otherId", requireAuth, async (req, res) => {
   try {
     const { userId, otherId } = req.params;
+
+    // 🛡️ Security: You can only check YOUR OWN status
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { data, error } = await supabase
       .from("interests")
       .select("*")
@@ -219,20 +251,18 @@ router.get("/status/:userId/:otherId", async (req, res) => {
 });
 
 // ============================================================
-// 🔒 POST /interests/send
+// 🔒 POST /interests/send (Already Secured)
 // ============================================================
 router.post("/send", requireAuth, validate(interestSchema), async (req, res) => {
   try {
     const { receiver_id, message } = req.body;
-    const sender_id = req.userId; // 🔒 From JWT/verified token
+    const sender_id = req.userId;
 
     if (!sender_id || !receiver_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
     if (sender_id === receiver_id) {
-      return res
-        .status(400)
-        .json({ error: "Cannot send interest to yourself" });
+      return res.status(400).json({ error: "Cannot send interest to yourself" });
     }
 
     const { data: existing } = await supabase
@@ -322,12 +352,12 @@ router.post("/send", requireAuth, validate(interestSchema), async (req, res) => 
 });
 
 // ============================================================
-// 🔒 POST /interests/shortlist
+// 🔒 POST /interests/shortlist (Already Secured)
 // ============================================================
 router.post("/shortlist", requireAuth, async (req, res) => {
   try {
     const { shortlisted_user_id } = req.body;
-    const user_id = req.userId; // 🔒 From token
+    const user_id = req.userId;
 
     if (!user_id || !shortlisted_user_id) {
       return res.status(400).json({ error: "Missing fields" });
@@ -353,11 +383,15 @@ router.post("/shortlist", requireAuth, async (req, res) => {
 });
 
 // ============================================================
-// GET /interests/shortlisted/:userId
+// GET /interests/shortlisted/:userId (Secured)
 // ============================================================
-router.get("/shortlisted/:userId", async (req, res) => {
+router.get("/shortlisted/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // 🛡️ Security: You can only view YOUR OWN shortlist
+    if (userId !== req.userId) return res.status(403).json({ error: "Forbidden" });
+
     const { data, error } = await supabase
       .from("shortlists")
       .select("*")
