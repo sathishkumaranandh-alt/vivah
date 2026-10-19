@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
-import helmet from 'helmet'; // 🛡️ Security headers
+
 
 // Route Imports
 import authRoutes from './routes/auth.js';
@@ -36,7 +36,7 @@ app.set('trust proxy', 1);
 // ============================================
 // 🛡️ 1. SECURITY HEADERS (Helmet)
 // ============================================
-app.use(helmet());
+
 
 // ============================================
 // 🛡️ 2. STRICT CORS
