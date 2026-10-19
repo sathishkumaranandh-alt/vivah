@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { requireAuth, requireAdmin } from "../utils/auth.js"; // 🛡️ Added Security
 
 const router = express.Router();
 
@@ -7,11 +8,12 @@ const router = express.Router();
 // POST /reports/create
 // Create a new report
 // ============================================================
-router.post("/create", async (req, res) => {
+router.post("/create", requireAuth, async (req, res) => {
   try {
-    const { reporter_id, reported_user_id, reason, details } = req.body;
+    const { reported_user_id, reason, details } = req.body;
+    const reporter_id = req.userId; // 🔒 Secure from JWT
 
-    if (!reporter_id || !reported_user_id || !reason) {
+    if (!reported_user_id || !reason) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -46,7 +48,7 @@ router.post("/create", async (req, res) => {
 // GET /reports/all
 // Get all reports (admin only)
 // ============================================================
-router.get("/all", async (req, res) => {
+router.get("/all", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { status } = req.query;
 
@@ -61,7 +63,6 @@ router.get("/all", async (req, res) => {
 
     if (error) throw error;
 
-    // Fetch reporter and reported user details
     const allUserIds = new Set();
     (data || []).forEach((r) => {
       allUserIds.add(r.reporter_id);
@@ -96,17 +97,18 @@ router.get("/all", async (req, res) => {
 // PATCH /reports/:reportId/resolve
 // Mark a report as resolved
 // ============================================================
-router.patch("/:reportId/resolve", async (req, res) => {
+router.patch("/:reportId/resolve", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { reportId } = req.params;
-    const { resolved_by, action } = req.body;
+    const { action } = req.body;
+    const resolved_by = req.userId; // 🔒 Secure from JWT
 
     const { data, error } = await supabase
       .from("reports")
       .update({
         status: "resolved",
         resolved_at: new Date().toISOString(),
-        resolved_by: resolved_by || null,
+        resolved_by: resolved_by,
         details: action ? `Action: ${action}` : undefined,
       })
       .eq("id", reportId)
@@ -126,7 +128,7 @@ router.patch("/:reportId/resolve", async (req, res) => {
 // PATCH /reports/:reportId/dismiss
 // Dismiss a report (mark as reviewed, no action)
 // ============================================================
-router.patch("/:reportId/dismiss", async (req, res) => {
+router.patch("/:reportId/dismiss", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { reportId } = req.params;
 
