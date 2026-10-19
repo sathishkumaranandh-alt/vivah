@@ -1,7 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { requireAdmin } from '../utils/auth.js';
+import { requireAuth, requireAdmin } from '../utils/auth.js'; // 🛡️ Added requireAuth
 
 dotenv.config();
 const router = express.Router();
@@ -12,7 +12,7 @@ const supabaseAdmin = createClient(
 );
 
 // ============================================
-// 🌍 GET all active plans (for users)
+// 🌍 GET all active plans (Public)
 // ============================================
 router.get('/', async (req, res) => {
   try {
@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
 // ============================================
 // 🔒 ADMIN — GET all plans including inactive
 // ============================================
-router.get('/admin/all', requireAdmin, async (req, res) => {
+router.get('/admin/all', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from('membership_plans')
@@ -45,10 +45,16 @@ router.get('/admin/all', requireAdmin, async (req, res) => {
 });
 
 // ============================================
-// 🌍 GET user's current plan & permissions
+// 🔒 GET user's current plan & permissions (Auth & Anti-Spoofing)
 // ============================================
-router.get('/user-plan/:userId', async (req, res) => {
+router.get('/user-plan/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
+
+  // 🛡️ Security Fix: Users can only view their OWN plan
+  if (userId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden: You cannot view others' plans" });
+  }
+
   try {
     const { data: sub } = await supabaseAdmin
       .from('subscriptions')
@@ -80,9 +86,8 @@ router.get('/user-plan/:userId', async (req, res) => {
 
 // ============================================
 // 🔒 CREATE a new plan (Admin)
-// ✅ FIX: Auto set is_active = true
 // ============================================
-router.post('/', requireAdmin, async (req, res) => {
+router.post('/', requireAuth, requireAdmin, async (req, res) => {
   const { name, price, duration_days, features, permissions, display_order } = req.body;
 
   if (!name) {
@@ -99,7 +104,7 @@ router.post('/', requireAdmin, async (req, res) => {
         features: features || [],
         permissions: permissions || {},
         display_order: parseInt(display_order, 10) || 0,
-        is_active: true,  // ✅ NEW — auto active so it shows on subscription page
+        is_active: true,
       })
       .select()
       .single();
@@ -113,28 +118,23 @@ router.post('/', requireAdmin, async (req, res) => {
 
 // ============================================
 // 🔒 UPDATE a plan (Admin)
-// ✅ FIX: Clean updates, safe types
 // ============================================
-router.put('/:id', requireAdmin, async (req, res) => {
+router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const updates = { ...req.body };
 
-  // 🔒 Remove fields that should not be updated
   delete updates.admin_id;
   delete updates.id;
   delete updates.created_at;
 
-  // 🔒 Ensure permissions is a valid object
   if (updates.permissions && typeof updates.permissions === 'object') {
     updates.permissions = { ...updates.permissions };
   }
 
-  // 🔒 Ensure is_active is boolean
   if (updates.is_active !== undefined) {
     updates.is_active = updates.is_active === true || updates.is_active === 'true';
   }
 
-  // 🔒 Ensure numeric fields are numbers
   if (updates.price !== undefined) {
     updates.price = parseInt(updates.price, 10) || 0;
   }
@@ -163,7 +163,7 @@ router.put('/:id', requireAdmin, async (req, res) => {
 // ============================================
 // 🔒 DELETE a plan (Admin)
 // ============================================
-router.delete('/:id', requireAdmin, async (req, res) => {
+router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { error } = await supabaseAdmin
