@@ -1,7 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { requireAdmin } from '../utils/auth.js';
+import { requireAdmin, requireAuth } from '../utils/auth.js'; // 🛡️ Added requireAuth
 
 dotenv.config();
 const router = express.Router();
@@ -31,7 +31,7 @@ router.get('/fields', async (req, res) => {
 // ============================================
 // 🔒 CREATE custom field
 // ============================================
-router.post('/fields', requireAdmin, async (req, res) => {
+router.post('/fields', requireAuth, requireAdmin, async (req, res) => {
   const {
     field_key, label, type, options, is_required, step,
     show_in_profile, profile_tab, display_order
@@ -62,7 +62,7 @@ router.post('/fields', requireAdmin, async (req, res) => {
 // ============================================
 // 🔒 UPDATE custom field
 // ============================================
-router.put('/fields/:id', requireAdmin, async (req, res) => {
+router.put('/fields/:id', requireAuth, requireAdmin, async (req, res) => {
   const { id } = req.params;
   const updates = { ...req.body };
   delete updates.admin_id;
@@ -84,7 +84,7 @@ router.put('/fields/:id', requireAdmin, async (req, res) => {
 // ============================================
 // 🔒 DELETE custom field
 // ============================================
-router.delete('/fields/:id', requireAdmin, async (req, res) => {
+router.delete('/fields/:id', requireAuth, requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { error } = await supabaseAdmin
@@ -118,7 +118,7 @@ router.get('/core-fields', async (req, res) => {
 // ============================================
 // 🔒 UPDATE a core field configuration
 // ============================================
-router.put('/core-fields/:key', requireAdmin, async (req, res) => {
+router.put('/core-fields/:key', requireAuth, requireAdmin, async (req, res) => {
   const { key } = req.params;
   const {
     is_active, is_required, show_in_profile, show_in_view,
