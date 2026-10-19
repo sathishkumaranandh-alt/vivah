@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
-
+import helmet from 'helmet'; // 🛡️ Security headers
 
 // Route Imports
 import authRoutes from './routes/auth.js';
@@ -36,7 +36,7 @@ app.set('trust proxy', 1);
 // ============================================
 // 🛡️ 1. SECURITY HEADERS (Helmet)
 // ============================================
-
+app.use(helmet());
 
 // ============================================
 // 🛡️ 2. STRICT CORS
@@ -52,7 +52,6 @@ app.use(
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
 
-      // 🔒 Strict check for localhost and Vercel
       const isVercelPreview = origin.includes('vivaha-frontend') && origin.endsWith('.vercel.app');
       const isExactLocalhost = origin === 'http://localhost:3000' || origin === 'http://localhost:5173';
 
@@ -74,7 +73,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ============================================
-// 🛡️ 4. RATE LIMITERS (Fixed GET scraping)
+// 🛡️ 4. RATE LIMITERS
 // ============================================
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -82,7 +81,6 @@ const generalLimiter = rateLimit({
   message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
-  // Removed 'skip: GET' to prevent data scraping
 });
 
 const actionLimiter = rateLimit({
@@ -127,7 +125,7 @@ app.use('/reports', actionLimiter);
 app.use('/boost', actionLimiter);
 
 app.use('/auth', authLimiter);
-app.use(generalLimiter); // Applies to everything else
+app.use(generalLimiter); 
 
 // ============================================
 // 5. Routes
@@ -137,7 +135,7 @@ app.use('/profile', profileRoutes);
 app.use('/messages', messageRoutes);
 app.use('/subscriptions', subscriptionRoutes);
 app.use('/reports', reportRoutes);
-app.use('/audit', auditRoutes); // 🔒 Fixed duplicate mount
+app.use('/audit', auditRoutes);
 app.use('/interests', interestRoutes);
 app.use('/notifications', notificationRoutes);
 app.use('/photos', photoRoutes);
@@ -153,6 +151,9 @@ app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
 app.use('/telegram', telegramRoutes);
 app.use('/blocks', blockRoutes);
+
+// 🛡️ FIX: Mount auditRoutes on root (/) as well so /settings works
+app.use('/', auditRoutes);
 
 // ============================================
 // Health check
