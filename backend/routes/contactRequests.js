@@ -2,6 +2,7 @@ import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { sendTelegram } from "../utils/telegram.js";
+import { requireAuth } from "../utils/auth.js"; // 🛡️ Added Security
 
 dotenv.config();
 const router = express.Router();
@@ -11,9 +12,13 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-// REQUEST contact access
-router.post("/request", async (req, res) => {
-  const { requester_id, owner_id } = req.body;
+// ============================================
+// REQUEST contact access (🔒 Secured)
+// ============================================
+router.post("/request", requireAuth, async (req, res) => {
+  const { owner_id } = req.body;
+  const requester_id = req.userId; // 🛡️ Taken from JWT
+
   if (!requester_id || !owner_id)
     return res.status(400).json({ error: "Missing IDs" });
   if (requester_id === owner_id)
@@ -30,7 +35,7 @@ router.post("/request", async (req, res) => {
       .single();
     if (error) throw error;
 
-    // Notify owner
+    // Notify owner (In-App)
     try {
       const { data: requester } = await supabaseAdmin
         .from("users")
@@ -52,7 +57,7 @@ router.post("/request", async (req, res) => {
 
       if (notifError) console.error("Notification insert error:", notifError);
 
-      // 📱 Telegram
+      // 📱 Telegram Notification
       const { data: owner } = await supabaseAdmin
         .from("users")
         .select("telegram_chat_id, telegram_opt_in")
@@ -77,9 +82,17 @@ router.post("/request", async (req, res) => {
   }
 });
 
-// INCOMING
-router.get("/incoming/:ownerId", async (req, res) => {
+// ============================================
+// INCOMING requests (🔒 Secured)
+// ============================================
+router.get("/incoming/:ownerId", requireAuth, async (req, res) => {
   const { ownerId } = req.params;
+
+  // 🛡️ Security: You can only view YOUR OWN incoming requests
+  if (ownerId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   try {
     const { data, error } = await supabaseAdmin
       .from("contact_requests")
@@ -106,11 +119,28 @@ router.get("/incoming/:ownerId", async (req, res) => {
   }
 });
 
-// RESPOND
-router.put("/respond/:id", async (req, res) => {
+// ============================================
+// RESPOND approve/deny (🔒 Secured)
+// ============================================
+router.put("/respond/:id", requireAuth, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
+
   try {
+    // 🛡️ Security: Fetch first to check who owns this request
+    const { data: request, error: fetchErr } = await supabaseAdmin
+      .from("contact_requests")
+      .select("owner_id, requester_id")
+      .eq("id", id)
+      .single();
+
+    if (fetchErr || !request) return res.status(404).json({ error: "Request not found" });
+
+    // Only the owner of the contact info can approve/deny
+    if (request.owner_id !== req.userId) {
+      return res.status(403).json({ error: "Forbidden: You are not the owner of this request" });
+    }
+
     const { data, error } = await supabaseAdmin
       .from("contact_requests")
       .update({ status })
@@ -150,7 +180,7 @@ router.put("/respond/:id", async (req, res) => {
 
       if (notifError) console.error("Notification insert error:", notifError);
 
-      // 📱 Telegram
+      // 📱 Telegram Notification
       const { data: requester } = await supabaseAdmin
         .from("users")
         .select("telegram_chat_id, telegram_opt_in")
@@ -178,9 +208,17 @@ router.put("/respond/:id", async (req, res) => {
   }
 });
 
-// STATUS
-router.get("/status/:requesterId/:ownerId", async (req, res) => {
+// ============================================
+// STATUS check (🔒 Secured)
+// ============================================
+router.get("/status/:requesterId/:ownerId", requireAuth, async (req, res) => {
   const { requesterId, ownerId } = req.params;
+
+  // 🛡️ Security: You can only check status for YOURSELF
+  if (requesterId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   try {
     const { data } = await supabaseAdmin
       .from("contact_requests")
