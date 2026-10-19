@@ -2,7 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js';
-import { computePhotoAccess } from '../utils/privacy.js'; // 🛡️ Added
+import { computePhotoAccess } from '../utils/privacy.js';
 
 dotenv.config();
 const router = express.Router();
@@ -23,15 +23,34 @@ async function getUserMaxPhotos(userId) {
   } catch (err) { return DEFAULT_MAX_PHOTOS; }
 }
 
-// GET all photos for a user
+// ============================================
+// GET ALL PHOTOS (Fixed Owner Access)
+// ============================================
 router.get('/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
   const viewerId = req.userId;
   
   try {
-    const { data: ownerRow } = await supabaseAdmin.from('users').select('photo_privacy').eq('id', userId).single();
-    const canView = await computePhotoAccess(supabaseAdmin, viewerId, userId, ownerRow, {});
+    // 1. Get owner data
+    const { data: ownerRow, error: ownerError } = await supabaseAdmin
+      .from('users')
+      .select('photo_privacy')
+      .eq('id', userId)
+      .maybeSingle(); // Use maybeSingle to avoid errors if not found
 
+    if (ownerError || !ownerRow) {
+      return res.json({ photos: [] }); // Return empty if owner not found
+    }
+
+    // 2. Check permissions (Owner always gets true)
+    let canView = false;
+    if (viewerId === userId) {
+      canView = true; // Owner sees their own photos
+    } else {
+      canView = await computePhotoAccess(supabaseAdmin, viewerId, userId, ownerRow, {});
+    }
+
+    // 3. Fetch photos
     const { data, error } = await supabaseAdmin
       .from('user_photos')
       .select('*')
@@ -41,20 +60,25 @@ router.get('/:userId', requireAuth, async (req, res) => {
 
     if (error) throw error;
 
-    // 🛡️ Mask URLs if no access
+    // 4. Mask URLs for unauthorized viewers
     const safePhotos = (data || []).map(p => {
-      if (!canView || p.is_private) {
-        return { ...p, photo_url: null, locked: true };
+      // Owner sees full URL. Others see null if locked.
+      if (canView) {
+        return p;
       }
-      return p;
+      return { ...p, photo_url: null, locked: true };
     });
 
     res.json({ photos: safePhotos });
   } catch (err) {
+    console.error("Photo fetch error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
+// ============================================
+// ADD NEW PHOTO
+// ============================================
 router.post('/add', requireAuth, async (req, res) => {
   const { photo_url, is_primary, is_private } = req.body;
   const user_id = req.userId;
@@ -83,6 +107,9 @@ router.post('/add', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// UPDATE PRIVACY
+// ============================================
 router.put('/:userId/privacy', requireAuth, async (req, res) => {
   const { userId } = req.params;
   const { is_private } = req.body;
@@ -95,6 +122,9 @@ router.put('/:userId/privacy', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// DELETE PHOTO
+// ============================================
 router.delete('/:photoId', requireAuth, async (req, res) => {
   const { photoId } = req.params;
   try {
@@ -117,6 +147,9 @@ router.delete('/:photoId', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================
+// SET PRIMARY PHOTO
+// ============================================
 router.patch('/:photoId/primary', requireAuth, async (req, res) => {
   const { photoId } = req.params;
   try {
