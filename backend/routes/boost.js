@@ -195,5 +195,59 @@ router.post('/admin/remove/:userId', requireAuth, requireAdmin, async (req, res)
     res.status(500).json({ error: err.message });
   }
 });
+// ============================================
+// CLAIM FREE BOOST (🔒 Auth Required & Plan Check)
+// ============================================
+router.post('/claim-free', requireAuth, async (req, res) => {
+  const userId = req.userId;
 
+  try {
+    // 1. Check if user's plan allows free boost
+    const { data: sub } = await supabaseAdmin
+      .from('subscriptions')
+      .select('plan')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .gte('expires_at', new Date().toISOString())
+      .maybeSingle();
+
+    const planName = sub?.plan || 'Free';
+    
+    const { data: planData } = await supabaseAdmin
+      .from('membership_plans')
+      .select('permissions')
+      .ilike('name', planName)
+      .single();
+
+    const hasFreeBoost = planData?.permissions?.profile_boost === true;
+
+    if (!hasFreeBoost) {
+      return res.status(403).json({ error: "Your plan does not include free boosts." });
+    }
+
+    // 2. Activate boost (same logic as /activate)
+    const { data: user, error: fetchErr } = await supabaseAdmin.from('users').select('id, boost_expires_at').eq('id', userId).maybeSingle();
+    if (fetchErr || !user) return res.status(404).json({ error: "User not found" });
+
+    const now = new Date();
+    const currentExpiry = user.boost_expires_at ? new Date(user.boost_expires_at) : null;
+    const startFrom = currentExpiry && currentExpiry > now ? currentExpiry : now;
+    const newExpiry = new Date(startFrom.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000);
+
+    await supabaseAdmin.from('users').update({ boost_expires_at: newExpiry.toISOString() }).eq('id', userId);
+
+    try {
+      await supabaseAdmin.from('boost_history').insert({
+        user_id: userId,
+        expires_at: newExpiry.toISOString(),
+        amount: 0,
+        payment_id: `PLAN_FREE_BOOST_${Date.now()}`,
+      });
+    } catch (logErr) {}
+
+    res.json({ success: true, expiresAt: newExpiry.toISOString(), message: "Free boost activated!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 export default router;
