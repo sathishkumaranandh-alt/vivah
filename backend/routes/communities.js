@@ -1,13 +1,12 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
-import { requireAdmin } from "../utils/auth.js";
+import { requireAdmin, requireAuth } from "../utils/auth.js"; // 🛡️ Added requireAuth
 
 const router = express.Router();
 
 // ============================================================
 // GET /communities
 // 🌍 PUBLIC — only active communities
-// Used by all users for community dropdown
 // ============================================================
 router.get("/", async (req, res) => {
   try {
@@ -29,7 +28,7 @@ router.get("/", async (req, res) => {
 // 🔒 GET /communities/all
 // ADMIN — includes inactive
 // ============================================================
-router.get("/all", requireAdmin, async (req, res) => {
+router.get("/all", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("communities")
@@ -48,7 +47,7 @@ router.get("/all", requireAdmin, async (req, res) => {
 // 🔒 POST /communities/bulk
 // ADMIN — Add multiple communities from a text list
 // ============================================================
-router.post("/bulk", requireAdmin, async (req, res) => {
+router.post("/bulk", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { list } = req.body;
     if (!list || typeof list !== "string") {
@@ -149,7 +148,7 @@ router.post("/bulk", requireAdmin, async (req, res) => {
 // 🔒 POST /communities
 // ADMIN — Create one community
 // ============================================================
-router.post("/", requireAdmin, async (req, res) => {
+router.post("/", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { slug, name, emoji, color, description, display_order } = req.body;
 
@@ -198,13 +197,13 @@ router.post("/", requireAdmin, async (req, res) => {
 // 🔒 PATCH /communities/:id
 // ADMIN — Update
 // ============================================================
-router.patch("/:id", requireAdmin, async (req, res) => {
+router.patch("/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
     delete updates.id;
     delete updates.created_at;
-    delete updates.admin_id; // Don't store admin_id in DB
+    delete updates.admin_id;
 
     if (updates.slug) {
       updates.slug = updates.slug.toLowerCase().trim().replace(/\s+/g, "_");
@@ -232,7 +231,7 @@ router.patch("/:id", requireAdmin, async (req, res) => {
 // 🔒 PATCH /communities/:id/toggle
 // ADMIN — Activate/Deactivate
 // ============================================================
-router.patch("/:id/toggle", requireAdmin, async (req, res) => {
+router.patch("/:id/toggle", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { data: current, error: fetchError } = await supabase
@@ -264,7 +263,7 @@ router.patch("/:id/toggle", requireAdmin, async (req, res) => {
 // 🔒 DELETE /communities/:id
 // ADMIN — Delete (only if no users in this community)
 // ============================================================
-router.delete("/:id", requireAdmin, async (req, res) => {
+router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
