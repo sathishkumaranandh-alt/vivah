@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAuth } from '../utils/auth.js'; // 🛡️ Added Auth
 
 dotenv.config();
 const router = express.Router();
@@ -18,7 +19,6 @@ const DEFAULT_MAX_PHOTOS = 3;
 // ============================================
 async function getUserMaxPhotos(userId) {
   try {
-    // Find user's active subscription
     const { data: sub } = await supabaseAdmin
       .from('subscriptions')
       .select('plan, status, expires_at')
@@ -31,7 +31,6 @@ async function getUserMaxPhotos(userId) {
 
     const planName = sub?.plan || 'Free';
 
-    // Get the plan
     const { data: planData } = await supabaseAdmin
       .from('membership_plans')
       .select('permissions')
@@ -45,8 +44,10 @@ async function getUserMaxPhotos(userId) {
   }
 }
 
-// GET all photos for a user
-router.get('/:userId', async (req, res) => {
+// ============================================
+// GET all photos for a user (🔒 Auth Required)
+// ============================================
+router.get('/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
   try {
     const { data, error } = await supabaseAdmin
@@ -63,11 +64,14 @@ router.get('/:userId', async (req, res) => {
   }
 });
 
-// ADD a new photo (with plan-based limit)
-router.post('/add', async (req, res) => {
-  const { user_id, photo_url, is_primary, is_private } = req.body;
+// ============================================
+// ADD a new photo (🔒 Auth Required & Anti-Spoofing)
+// ============================================
+router.post('/add', requireAuth, async (req, res) => {
+  const { photo_url, is_primary, is_private } = req.body;
+  const user_id = req.userId; // 🛡️ Securely taken from JWT
+
   try {
-    // Get user's plan-based limit
     const maxPhotos = await getUserMaxPhotos(user_id);
 
     const { count, error: countError } = await supabaseAdmin
@@ -107,10 +111,18 @@ router.post('/add', async (req, res) => {
   }
 });
 
-// UPDATE privacy for all photos of a user
-router.put('/:userId/privacy', async (req, res) => {
+// ============================================
+// UPDATE privacy for all photos of a user (🔒 Auth Required & Anti-Spoofing)
+// ============================================
+router.put('/:userId/privacy', requireAuth, async (req, res) => {
   const { userId } = req.params;
   const { is_private } = req.body;
+
+  // 🛡️ Security: You can only change YOUR OWN photo privacy
+  if (userId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden: You cannot change others' privacy settings" });
+  }
+
   try {
     const { error } = await supabaseAdmin
       .from('user_photos')
@@ -123,8 +135,10 @@ router.put('/:userId/privacy', async (req, res) => {
   }
 });
 
-// DELETE a photo
-router.delete('/:photoId', async (req, res) => {
+// ============================================
+// DELETE a photo (🔒 Auth Required & Ownership Check)
+// ============================================
+router.delete('/:photoId', requireAuth, async (req, res) => {
   const { photoId } = req.params;
   try {
     const { data: photo, error: fetchError } = await supabaseAdmin
@@ -135,6 +149,11 @@ router.delete('/:photoId', async (req, res) => {
 
     if (fetchError) throw fetchError;
     if (!photo) return res.status(404).json({ error: "Photo not found" });
+
+    // 🛡️ Security: You can only delete YOUR OWN photos
+    if (photo.user_id !== req.userId) {
+      return res.status(403).json({ error: "Forbidden: You cannot delete others' photos" });
+    }
 
     const { error: deleteError } = await supabaseAdmin
       .from('user_photos')
@@ -166,8 +185,10 @@ router.delete('/:photoId', async (req, res) => {
   }
 });
 
-// SET a photo as primary
-router.patch('/:photoId/primary', async (req, res) => {
+// ============================================
+// SET a photo as primary (🔒 Auth Required & Ownership Check)
+// ============================================
+router.patch('/:photoId/primary', requireAuth, async (req, res) => {
   const { photoId } = req.params;
   try {
     const { data: photo, error: fetchError } = await supabaseAdmin
@@ -178,6 +199,11 @@ router.patch('/:photoId/primary', async (req, res) => {
 
     if (fetchError) throw fetchError;
     if (!photo) return res.status(404).json({ error: "Photo not found" });
+
+    // 🛡️ Security: You can only set primary for YOUR OWN photos
+    if (photo.user_id !== req.userId) {
+      return res.status(403).json({ error: "Forbidden: You cannot change others' photos" });
+    }
 
     await supabaseAdmin.from('user_photos').update({ is_primary: false }).eq('user_id', photo.user_id);
     await supabaseAdmin.from('user_photos').update({ is_primary: true }).eq('id', photoId);
