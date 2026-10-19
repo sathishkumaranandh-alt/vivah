@@ -2,6 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { requireAuth } from '../utils/auth.js';
 
 dotenv.config();
 const router = express.Router();
@@ -15,12 +16,56 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 
 // ============================================
-// LINK user's Telegram account
+// 🛡️ NEW: GENERATE SECURE LINK TOKEN
 // ============================================
-router.post('/link', async (req, res) => {
-  const { userId, chatId } = req.body;
-  if (!userId || !chatId)
-    return res.status(400).json({ error: 'Missing userId or chatId' });
+router.post('/generate-token', requireAuth, async (req, res) => {
+  try {
+    // Generate a random 6-digit code
+    const token = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000; // Valid for 15 mins
+
+    const { data: user, error: fetchError } = await supabaseAdmin
+      .from('users')
+      .select('custom_permissions')
+      .eq('id', req.userId)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    // Store token inside custom_permissions JSON so we don't need DB changes
+    const currentPerms = user?.custom_permissions || {};
+    const newPerms = {
+      ...currentPerms,
+      telegram_link_token: token,
+      telegram_token_expires: expiresAt
+    };
+
+    const { error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ custom_permissions: newPerms })
+      .eq('id', req.userId);
+
+    if (updateError) throw updateError;
+
+    res.json({ 
+      success: true, 
+      token, 
+      message: `Send /start ${token} to the Telegram bot to link your account.` 
+    });
+  } catch (err) {
+    console.error("Generate token error:", err);
+    res.status(500).json({ error: "Failed to generate token" });
+  }
+});
+
+// ============================================
+// 🔒 MANUAL LINK / UNLINK (Now Requires Auth)
+// ============================================
+router.post('/link', requireAuth, async (req, res) => {
+  const { chatId } = req.body;
+  const userId = req.userId; // 🔒 From JWT
+
+  if (!chatId) return res.status(400).json({ error: 'Missing chatId' });
 
   try {
     const { error } = await supabaseAdmin
@@ -34,12 +79,9 @@ router.post('/link', async (req, res) => {
   }
 });
 
-// ============================================
-// UNLINK Telegram
-// ============================================
-router.post('/unlink', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+router.post('/unlink', requireAuth, async (req, res) => {
+  const userId = req.userId; // 🔒 From JWT
+
   try {
     const { error } = await supabaseAdmin
       .from('users')
@@ -57,7 +99,6 @@ router.post('/unlink', async (req, res) => {
 // ============================================
 router.post('/webhook', async (req, res) => {
   try {
-    // 🔒 Verify secret token
     const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
 
     if (!WEBHOOK_SECRET) {
@@ -77,28 +118,68 @@ router.post('/webhook', async (req, res) => {
     const chatId = message.chat.id;
     const text = (message.text || '').trim();
 
-    // ---- /start [USER_ID] ----
+    // ---- /start [SECURE_TOKEN] ----
     if (text.startsWith('/start')) {
       const parts = text.split(' ');
-      const userId = parts[1];
+      const token = parts[1];
 
-      if (userId) {
-        await supabaseAdmin
-          .from('users')
-          .update({ telegram_chat_id: String(chatId), telegram_opt_in: true })
-          .eq('id', userId);
+      if (!token) {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          chat_id: chatId,
+          text: `💍 <b>Welcome to Vivaha Matrimony Alerts!</b>\n\nTo link your account, please generate a secure code from your profile settings on the website.`,
+          parse_mode: 'HTML',
+        });
+        return res.json({ ok: true });
       }
+
+      // 🔒 Find user by token using Supabase JSON query
+      const { data: users, error } = await supabaseAdmin
+        .from('users')
+        .select('id, custom_permissions')
+        .eq('custom_permissions->>telegram_link_token', token);
+
+      if (error || !users || users.length === 0) {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          chat_id: chatId,
+          text: `❌ Invalid or expired link code. Please generate a new one on the website.`,
+        });
+        return res.json({ ok: true });
+      }
+
+      const user = users[0];
+      const expires = user.custom_permissions?.telegram_token_expires || 0;
+
+      if (Date.now() > expires) {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          chat_id: chatId,
+          text: `❌ This link code has expired. Please generate a new one on the website.`,
+        });
+        return res.json({ ok: true });
+      }
+
+      // 🔒 Valid token! Link the account.
+      const newPerms = { ...user.custom_permissions };
+      delete newPerms.telegram_link_token;
+      delete newPerms.telegram_token_expires;
+
+      await supabaseAdmin
+        .from('users')
+        .update({ 
+          telegram_chat_id: String(chatId), 
+          telegram_opt_in: true,
+          custom_permissions: newPerms // Clean up token
+        })
+        .eq('id', user.id);
 
       await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         chat_id: chatId,
         text:
-          `💍 <b>Welcome to Vivaha Matrimony Alerts!</b>\n\n` +
+          `✅ <b>Account Linked Successfully!</b>\n\n` +
           `You'll receive updates about:\n` +
           `• 💌 New interests\n` +
           `• 💬 New messages\n` +
           `• 👀 Profile views\n` +
-          `• ✅ Match approvals\n` +
-          `• ⭐ Subscription alerts\n\n` +
+          `• ✅ Match approvals\n\n` +
           `Send /stop to pause, /help for commands.`,
         parse_mode: 'HTML',
       });
