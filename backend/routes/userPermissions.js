@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAdmin } from '../utils/auth.js'; // 🛡️ Added Auth
 
 dotenv.config();
 const router = express.Router();
@@ -9,6 +10,9 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
+// 🛡️ Apply Admin check to ALL routes in this file
+router.use(requireAdmin);
 
 // GET custom permissions for a user
 router.get('/user/:userId', async (req, res) => {
@@ -29,7 +33,7 @@ router.get('/user/:userId', async (req, res) => {
   }
 });
 
-// UPDATE custom permissions for a user (Admin only)
+// UPDATE custom permissions for a user
 router.put('/user/:userId', async (req, res) => {
   const { userId } = req.params;
   const { custom_permissions, category } = req.body;
@@ -128,7 +132,7 @@ router.delete('/categories/:id', async (req, res) => {
   }
 });
 
-// APPLY a category to a user (Admin)
+// APPLY a category to a user
 router.post('/apply-category/:userId/:categoryName', async (req, res) => {
   const { userId, categoryName } = req.params;
   try {
