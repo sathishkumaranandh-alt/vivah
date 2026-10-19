@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAuth, requireAdmin } from '../utils/auth.js'; // 🛡️ Added Security
 
 dotenv.config();
 const router = express.Router();
@@ -16,15 +17,19 @@ const BOOST_DURATION_DAYS = 7;
 // ============================================
 // GET boost status for a user
 // ============================================
-router.get('/status/:userId', async (req, res) => {
+router.get('/status/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
+
+  // 🛡️ Security: Can only check your own boost status
+  if (userId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
 
   if (!userId) {
     return res.status(400).json({ error: "Missing userId" });
   }
 
   try {
-    // ✅ FIX: Use maybeSingle() — no error if user not found
     const { data, error } = await supabaseAdmin
       .from('users')
       .select('id, boost_expires_at')
@@ -36,7 +41,6 @@ router.get('/status/:userId', async (req, res) => {
       throw error;
     }
 
-    // User not found — treat as no boost
     if (!data) {
       return res.json({
         isActive: false,
@@ -69,12 +73,10 @@ router.get('/status/:userId', async (req, res) => {
 // ============================================
 // ACTIVATE boost
 // ============================================
-router.post('/activate', async (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: "Missing userId" });
+router.post('/activate', requireAuth, async (req, res) => {
+  const userId = req.userId; // 🔒 Securely taken from JWT, not body
 
   try {
-    // ✅ FIX: Use maybeSingle()
     const { data: user, error: fetchErr } = await supabaseAdmin
       .from('users')
       .select('id, boost_expires_at')
@@ -95,7 +97,6 @@ router.post('/activate', async (req, res) => {
       ? new Date(user.boost_expires_at)
       : null;
 
-    // If already active, extend from current expiry. Otherwise start from now.
     const startFrom = currentExpiry && currentExpiry > now ? currentExpiry : now;
     const newExpiry = new Date(
       startFrom.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000
@@ -108,7 +109,6 @@ router.post('/activate', async (req, res) => {
 
     if (updateErr) throw updateErr;
 
-    // Log history (safe insert — don't break if table missing)
     try {
       await supabaseAdmin.from('boost_history').insert({
         user_id: userId,
@@ -134,12 +134,11 @@ router.post('/activate', async (req, res) => {
 // ============================================
 // ADMIN: Grant free boost
 // ============================================
-router.post('/admin/grant/:userId', async (req, res) => {
+router.post('/admin/grant/:userId', requireAuth, requireAdmin, async (req, res) => {
   const { userId } = req.params;
   const { days = 7 } = req.body;
 
   try {
-    // Check user exists
     const { data: user, error: fetchErr } = await supabaseAdmin
       .from('users')
       .select('id')
@@ -180,7 +179,7 @@ router.post('/admin/grant/:userId', async (req, res) => {
 // ============================================
 // ADMIN: Remove boost
 // ============================================
-router.post('/admin/remove/:userId', async (req, res) => {
+router.post('/admin/remove/:userId', requireAuth, requireAdmin, async (req, res) => {
   const { userId } = req.params;
 
   try {
