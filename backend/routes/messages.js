@@ -7,8 +7,13 @@ import { validate, messageSchema } from '../utils/validators.js';
 const router = express.Router();
 
 // ============================================
-// HELPERS
+// 🛡️ HELPER: Validate UUID to prevent PostgREST Injection
 // ============================================
+const isValidUUID = (uuid) => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(uuid);
+};
+
 async function areConnected(user1, user2) {
   const { data, error } = await supabase
     .from("interests")
@@ -46,11 +51,11 @@ function isUserOnline(lastSeenIso) {
 }
 
 // ============================================
-// 1. GET /messages/unread/:userId
+// 1. GET /messages/unread (🔒 Secured)
 // ============================================
-router.get("/unread/:userId", async (req, res) => {
+router.get("/unread", requireAuth, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.userId; // 🔒 From JWT
     const { count, error } = await supabase
       .from("messages")
       .select("*", { count: "exact", head: true })
@@ -64,11 +69,17 @@ router.get("/unread/:userId", async (req, res) => {
 });
 
 // ============================================
-// 2. PATCH /messages/mark-read/:userId/:partnerId
+// 2. PATCH /messages/mark-read/:userId/:partnerId (🔒 Secured)
 // ============================================
-router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
+router.patch("/mark-read/:userId/:partnerId", requireAuth, async (req, res) => {
   try {
     const { userId, partnerId } = req.params;
+    
+    // 🛡️ Security: You can only mark YOUR OWN messages as read
+    if (userId !== req.userId || !isValidUUID(partnerId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const { error } = await supabase
       .from("messages")
       .update({
@@ -86,11 +97,11 @@ router.patch("/mark-read/:userId/:partnerId", async (req, res) => {
 });
 
 // ============================================
-// 3. GET /messages/conversations/:userId
+// 3. GET /messages/conversations (🔒 Secured)
 // ============================================
-router.get("/conversations/:userId", async (req, res) => {
+router.get("/conversations", requireAuth, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.userId; // 🔒 From JWT
 
     const { data: connections } = await supabase
       .from("interests")
@@ -194,11 +205,16 @@ router.get("/conversations/:userId", async (req, res) => {
 });
 
 // ============================================
-// 4. GET /messages/chat/:user1/:user2
+// 4. GET /messages/chat/:user1/:user2 (🔒 Secured)
 // ============================================
-router.get("/chat/:user1/:user2", async (req, res) => {
+router.get("/chat/:user1/:user2", requireAuth, async (req, res) => {
   try {
     const { user1, user2 } = req.params;
+
+    // 🛡️ Security: user1 must be the authenticated user
+    if (user1 !== req.userId || !isValidUUID(user2)) {
+      return res.status(403).json({ error: "Forbidden: You cannot read others' chats" });
+    }
 
     const { data, error } = await supabase
       .from("messages")
@@ -226,16 +242,15 @@ router.get("/chat/:user1/:user2", async (req, res) => {
 });
 
 // ============================================
-// 5. 🔒 POST /messages/send
-// Uses req.userId from verified JWT
+// 5. POST /messages/send (Already Secured)
 // ============================================
 router.post("/send", requireAuth, validate(messageSchema), async (req, res) => {
   try {
     const { receiver_id, text, image_url, message_type } = req.body;
-    const sender_id = req.userId; // 🔒 From verified token
+    const sender_id = req.userId;
 
-    if (!sender_id || !receiver_id) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!sender_id || !receiver_id || !isValidUUID(receiver_id)) {
+      return res.status(400).json({ error: "Missing or invalid required fields" });
     }
     if (sender_id === receiver_id) {
       return res.status(400).json({ error: "Cannot message yourself" });
@@ -252,7 +267,6 @@ router.post("/send", requireAuth, validate(messageSchema), async (req, res) => {
       });
     }
 
-    // ⭐ Block check
     const blockCheck = await isBlockedBetween(sender_id, receiver_id);
     if (blockCheck.blocked) {
       return res.status(403).json({
@@ -279,41 +293,21 @@ router.post("/send", requireAuth, validate(messageSchema), async (req, res) => {
       .single();
     if (error) throw error;
 
-    // In-app notification
     try {
-      const { data: sender } = await supabase
-        .from("users")
-        .select("name")
-        .eq("id", sender_id)
-        .single();
-
+      const { data: sender } = await supabase.from("users").select("name").eq("id", sender_id).single();
       await supabase.from("notifications").insert([{
         user_id: receiver_id,
         actor_id: sender_id,
         type: "message_received",
         title: "New Message 💬",
-        body: image_url
-          ? `${sender?.name || "Someone"} sent a photo`
-          : `${sender?.name || "Someone"}: ${text.trim().slice(0, 60)}`,
+        body: image_url ? `${sender?.name || "Someone"} sent a photo` : `${sender?.name || "Someone"}: ${text.trim().slice(0, 60)}`,
         link: `/messages?to=${sender_id}`,
       }]);
-    } catch (e) {
-      console.error("Notify error:", e);
-    }
+    } catch (e) { console.error("Notify error:", e); }
 
-    // Telegram notification
     try {
-      const { data: receiver } = await supabase
-        .from("users")
-        .select("telegram_chat_id, telegram_opt_in")
-        .eq("id", receiver_id)
-        .single();
-
-      const { data: senderInfo } = await supabase
-        .from("users")
-        .select("name")
-        .eq("id", sender_id)
-        .single();
+      const { data: receiver } = await supabase.from("users").select("telegram_chat_id, telegram_opt_in").eq("id", receiver_id).single();
+      const { data: senderInfo } = await supabase.from("users").select("name").eq("id", sender_id).single();
 
       if (receiver?.telegram_opt_in && receiver?.telegram_chat_id) {
         await sendTelegram(
@@ -321,9 +315,7 @@ router.post("/send", requireAuth, validate(messageSchema), async (req, res) => {
           `💬 <b>New Message</b>\n\nFrom: <b>${senderInfo?.name || "Someone"}</b>\n\nTap to open Vivaha →`
         );
       }
-    } catch (e) {
-      console.error("Telegram notify error:", e);
-    }
+    } catch (e) { console.error("Telegram notify error:", e); }
 
     res.status(201).json({ message: "Message sent", data });
   } catch (err) {
@@ -332,13 +324,15 @@ router.post("/send", requireAuth, validate(messageSchema), async (req, res) => {
 });
 
 // ============================================
-// 6. POST /messages/typing
+// 6. POST /messages/typing (🔒 Secured)
 // ============================================
-router.post("/typing", async (req, res) => {
+router.post("/typing", requireAuth, async (req, res) => {
   try {
-    const { user_id, typing_to } = req.body;
-    if (!user_id || !typing_to) {
-      return res.status(400).json({ error: "Missing user_id or typing_to" });
+    const { typing_to } = req.body;
+    const user_id = req.userId; // 🔒 From JWT
+
+    if (!typing_to || !isValidUUID(typing_to)) {
+      return res.status(400).json({ error: "Missing or invalid typing_to" });
     }
 
     await supabase.from("typing_status").upsert({
@@ -354,11 +348,16 @@ router.post("/typing", async (req, res) => {
 });
 
 // ============================================
-// 7. GET /messages/typing-status/:partnerId/:userId
+// 7. GET /messages/typing-status/:partnerId/:userId (🔒 Secured)
 // ============================================
-router.get("/typing-status/:partnerId/:userId", async (req, res) => {
+router.get("/typing-status/:partnerId/:userId", requireAuth, async (req, res) => {
   try {
     const { partnerId, userId } = req.params;
+
+    // 🛡️ Security: You can only check typing status for YOURSELF
+    if (userId !== req.userId || !isValidUUID(partnerId)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     const { data } = await supabase
       .from("typing_status")
@@ -381,12 +380,11 @@ router.get("/typing-status/:partnerId/:userId", async (req, res) => {
 });
 
 // ============================================
-// 8. 🔒 POST /messages/heartbeat
-// Uses req.userId from verified JWT
+// 8. POST /messages/heartbeat (Already Secured)
 // ============================================
 router.post("/heartbeat", requireAuth, async (req, res) => {
   try {
-    const user_id = req.userId; // 🔒 From token
+    const user_id = req.userId;
     if (!user_id) return res.status(400).json({ error: "Missing user_id" });
 
     await supabase
@@ -401,11 +399,16 @@ router.post("/heartbeat", requireAuth, async (req, res) => {
 });
 
 // ============================================
-// 9. DELETE /messages/chat/:user1/:user2
+// 9. DELETE /messages/chat/:user1/:user2 (🔒 Secured)
 // ============================================
-router.delete("/chat/:user1/:user2", async (req, res) => {
+router.delete("/chat/:user1/:user2", requireAuth, async (req, res) => {
   try {
     const { user1, user2 } = req.params;
+
+    // 🛡️ Security: user1 must be the authenticated user
+    if (user1 !== req.userId || !isValidUUID(user2)) {
+      return res.status(403).json({ error: "Forbidden: You cannot delete others' chats" });
+    }
 
     const { error } = await supabase
       .from("messages")
