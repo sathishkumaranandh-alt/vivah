@@ -28,7 +28,7 @@ router.post('/create-order', requireAuth, async (req, res) => {
   const userId = req.userId;
 
   if (!amount || amount <= 0) {
-    return res.status(400).json({ error: 'Invalid amount' });
+    return res.status(400).json({ error: 'Invalid amount. Must be greater than 0.' });
   }
 
   try {
@@ -37,6 +37,10 @@ router.post('/create-order', requireAuth, async (req, res) => {
       .select('name, mobile, email')
       .eq('id', userId)
       .single();
+
+    // Cashfree requires a valid 10-digit phone number. Fallback if empty.
+    let phone = userData?.mobile || '9999999999';
+    if (phone.length < 10) phone = '9999999999';
 
     const orderId = `order_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
@@ -48,7 +52,7 @@ router.post('/create-order', requireAuth, async (req, res) => {
         customer_id: userId,
         customer_name: userData?.name || 'Vivaha User',
         customer_email: userData?.email || 'user@vivaha.com',
-        customer_phone: userData?.mobile || '9999999999',
+        customer_phone: phone,
       },
       order_meta: {
         return_url: `https://vivaha-frontend.vercel.app/subscription?order_id=${orderId}`,
@@ -68,7 +72,18 @@ router.post('/create-order', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Cashfree create order error:', err?.response?.data || err.message);
-    res.status(500).json({ error: 'Failed to create payment order' });
+    
+    // 🛡️ FIX: Return actual error message to Frontend
+    let errorMsg = 'Failed to create payment order';
+    if (err?.response?.data?.message) {
+      errorMsg = err.response.data.message;
+    } else if (err?.response?.data) {
+      errorMsg = JSON.stringify(err.response.data);
+    } else if (err?.message) {
+      errorMsg = err.message;
+    }
+    
+    res.status(500).json({ error: errorMsg });
   }
 });
 
@@ -97,19 +112,21 @@ router.post('/verify-payment', requireAuth, async (req, res) => {
       .ilike('name', planName)
       .single();
 
-    if (!planData) return res.status(404).json({ error: 'Plan not found' });
+    if (!planData) return res.status(404).json({ error: 'Plan not found in DB' });
 
     const now = new Date();
     const expiresAt = new Date(
       now.getTime() + (planData.duration_days || 30) * 24 * 60 * 60 * 1000
     );
 
+    // Cancel old active subscriptions
     await supabaseAdmin
       .from('subscriptions')
       .update({ status: 'cancelled', updated_at: now.toISOString() })
       .eq('user_id', userId)
       .eq('status', 'active');
 
+    // Insert new subscription
     const { data: sub, error } = await supabaseAdmin
       .from('subscriptions')
       .insert([
