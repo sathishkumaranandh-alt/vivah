@@ -155,5 +155,107 @@ router.post('/verify-payment', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Payment verification failed' });
   }
 });
+// ============================================
+// 3. CREATE BOOST ORDER
+// ============================================
+router.post('/create-boost-order', requireAuth, async (req, res) => {
+  const { amount } = req.body;
+  const userId = req.userId;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+
+  try {
+    const { data: userData } = await supabaseAdmin
+      .from('users')
+      .select('name, mobile, email')
+      .eq('id', userId)
+      .single();
+
+    let phone = userData?.mobile || '9999999999';
+    if (phone.length < 10) phone = '9999999999';
+
+    const orderId = `boost_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    const request = {
+      order_amount: Number(amount),
+      order_currency: 'INR',
+      order_id: orderId,
+      customer_details: {
+        customer_id: userId,
+        customer_name: userData?.name || 'Vivaha User',
+        customer_email: userData?.email || 'user@vivaha.com',
+        customer_phone: phone,
+      },
+      order_meta: {
+        return_url: `https://vivaha-frontend.vercel.app/boost?order_id=${orderId}`,
+      },
+      order_note: `Profile Boost`,
+    };
+
+    // 🛡️ Passing API version '2023-08-01' to fix the SDK error
+    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
+
+    res.json({
+      success: true,
+      order_id: orderId,
+      payment_session_id: response.data.payment_session_id,
+      cashfree_env: process.env.CASHFREE_ENV || 'SANDBOX',
+    });
+  } catch (err) {
+    console.error('Cashfree boost order error:', err?.response?.data || err.message);
+    let errorMsg = 'Failed to create boost order';
+    if (err?.response?.data?.message) errorMsg = err.response.data.message;
+    res.status(500).json({ error: errorMsg });
+  }
+});
+
+// ============================================
+// 4. VERIFY BOOST PAYMENT
+// ============================================
+router.post('/verify-boost-payment', requireAuth, async (req, res) => {
+  const { order_id } = req.body;
+  const userId = req.userId;
+
+  if (!order_id) return res.status(400).json({ error: 'Missing order_id' });
+
+  try {
+    const response = await Cashfree.PGFetchOrder("2023-08-01", order_id);
+    const orderStatus = response.data.order_status;
+
+    if (orderStatus !== 'PAID') {
+      return res.status(400).json({ error: `Payment not completed. Status: ${orderStatus}` });
+    }
+
+    const now = new Date();
+    const newExpiry = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days boost
+
+    // Update user's boost expiry
+    await supabaseAdmin
+      .from('users')
+      .update({ boost_expires_at: newExpiry.toISOString() })
+      .eq('id', userId);
+
+    // Log history
+    try {
+      await supabaseAdmin.from('boost_history').insert({
+        user_id: userId,
+        expires_at: newExpiry.toISOString(),
+        amount: response.data.order_amount,
+        payment_id: response.data.cf_payment_id || order_id,
+      });
+    } catch (logErr) { console.warn("Boost history log failed:", logErr); }
+
+    res.json({
+      success: true,
+      message: 'Boost activated for 7 days!',
+      expiresAt: newExpiry.toISOString(),
+    });
+  } catch (err) {
+    console.error('Cashfree verify boost error:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Payment verification failed' });
+  }
+});
 
 export default router;
