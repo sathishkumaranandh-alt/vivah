@@ -2,6 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import crypto from 'crypto'; // 🛡️ Added for secure tokens
 import { requireAuth } from '../utils/auth.js';
 
 dotenv.config();
@@ -20,8 +21,8 @@ const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 // ============================================
 router.post('/generate-token', requireAuth, async (req, res) => {
   try {
-    // Generate a random 6-digit code
-    const token = Math.floor(100000 + Math.random() * 900000).toString();
+    // 🛡️ SECURITY FIX: Use crypto.randomInt instead of Math.random()
+    const token = crypto.randomInt(100000, 999999).toString();
     const expiresAt = Date.now() + 15 * 60 * 1000; // Valid for 15 mins
 
     const { data: user, error: fetchError } = await supabaseAdmin
@@ -32,7 +33,7 @@ router.post('/generate-token', requireAuth, async (req, res) => {
 
     if (fetchError) throw fetchError;
 
-    // Store token inside custom_permissions JSON so we don't need DB changes
+    // Store token inside custom_permissions JSON
     const currentPerms = user?.custom_permissions || {};
     const newPerms = {
       ...currentPerms,
