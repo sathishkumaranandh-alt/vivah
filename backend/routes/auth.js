@@ -18,37 +18,53 @@ function calculateAge(dob) {
   return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
 }
 
+// 🛡️ Helper to escape HTML (Prevents Telegram HTML Injection)
+const escapeHtml = (str) => {
+  if (!str) return "";
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+};
+
 // POST /auth/signup - Handles full registration
 router.post('/signup', async (req, res) => {
   const data = req.body;
 
-  if (!data.email || !data.password) {
-    return res.status(400).json({ error: "Email and password are required" });
+  // 🛡️ VALIDATION FIX
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!data.email || !emailRegex.test(data.email)) {
+    return res.status(400).json({ error: "Valid email address is required" });
   }
+  if (!data.password || data.password.length < 6 || data.password.length > 72) {
+    return res.status(400).json({ error: "Password must be between 6 and 72 characters" });
+  }
+  if (!data.name || !data.gender) {
+    return res.status(400).json({ error: "Name and Gender are required" });
+  }
+
+  let userId = null;
 
   try {
     // 1. Create the user in Supabase Auth
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email: data.email,
+      email: data.email.trim(),
       password: data.password,
       email_confirm: true,
       user_metadata: { community: data.community }
     });
 
     if (authError) throw authError;
-    const userId = authData.user.id;
+    userId = authData.user.id;
 
     // 2. Save the full profile to the users table
     const { error: dbError } = await supabaseAdmin
       .from('users')
       .upsert([{
         id: userId,
-        email: data.email,
+        email: data.email.trim(),
         community: data.community,
         role: 'user',
         profile_for: data.profile_for,
-        name: data.name,
-        gender: data.gender,
+        name: data.name.trim(),
+        gender: data.gender.toLowerCase(),
         dob: data.dob || null,
         marital_status: data.marital_status,
         mother_tongue: data.mother_tongue,
@@ -84,18 +100,20 @@ router.post('/signup', async (req, res) => {
         updated_at: new Date().toISOString(),
       }]);
 
-    if (dbError) throw dbError;
+    if (dbError) {
+      // 🛡️ ORPHAN USER FIX: If DB fails, delete the Auth user
+      await supabaseAdmin.auth.admin.deleteUser(userId).catch(console.error);
+      throw new Error("Database error");
+    }
 
     // ==========================================
     // 3. TELEGRAM MATCH NOTIFICATION
     // ==========================================
     console.log("--- STARTING TELEGRAM MATCH ---");
     const newUserAge = calculateAge(data.dob);
-    const newUserGender = data.gender?.toLowerCase(); // 'male' or 'female'
-    
-    console.log("New user age:", newUserAge, "| Gender:", newUserGender, "| Community:", data.community);
+    const newUserGender = data.gender?.toLowerCase();
 
-    // Fetch all users who have Telegram enabled (ADDED: gender to select)
+    // Fetch all users who have Telegram enabled
     const { data: paidUsers, error: paidError } = await supabaseAdmin
       .from('users')
       .select(`id, name, gender, telegram_chat_id, pref_age_min, pref_age_max, pref_community`)
@@ -105,11 +123,8 @@ router.post('/signup', async (req, res) => {
     if (paidError) console.error("Paid users query error:", paidError);
 
     if (paidUsers && paidUsers.length > 0) {
-      console.log("Found telegram-enabled users:", paidUsers.length);
-      
       const userIds = paidUsers.map(u => u.id);
       
-      // Check which of these users have an ACTIVE paid subscription
       const { data: activeSubs } = await supabaseAdmin
         .from('subscriptions')
         .select('user_id')
@@ -118,32 +133,20 @@ router.post('/signup', async (req, res) => {
         .gte('expires_at', new Date().toISOString());
 
       const paidUserIds = new Set((activeSubs || []).map(s => s.user_id));
-      console.log("Active paid users found:", paidUserIds.size);
 
-      // Filter paid users who match the new user's profile
       const matchedPaidUsers = paidUsers.filter(paidUser => {
-        // 1. Must have an active paid subscription
         if (!paidUserIds.has(paidUser.id)) return false;
-        
-        // 2. Must not be the new user themselves
         if (paidUser.id === userId) return false;
 
-        // 3. Gender match (Opposite Gender Logic)
         const paidUserGender = paidUser.gender?.toLowerCase();
         let genderMatch = false;
-        if (paidUserGender === 'male') {
-          genderMatch = (newUserGender === 'female');
-        } else if (paidUserGender === 'female') {
-          genderMatch = (newUserGender === 'male');
-        } else {
-          genderMatch = true; // Fallback if gender is not set
-        }
+        if (paidUserGender === 'male') genderMatch = (newUserGender === 'female');
+        else if (paidUserGender === 'female') genderMatch = (newUserGender === 'male');
+        else genderMatch = true;
 
-        // 4. Age match
         const ageMatch = (!paidUser.pref_age_min || newUserAge >= paidUser.pref_age_min) &&
                          (!paidUser.pref_age_max || newUserAge <= paidUser.pref_age_max);
 
-        // 5. Community match (if they specified a preference)
         const communityMatch = !paidUser.pref_community || 
                                paidUser.pref_community === data.community ||
                                paidUser.pref_community.toLowerCase() === 'any';
@@ -153,26 +156,28 @@ router.post('/signup', async (req, res) => {
 
       console.log("Matched users to notify:", matchedPaidUsers.length);
 
-      // Send Telegram message to each matched paid user
-      for (const match of matchedPaidUsers) {
-        console.log("Sending Telegram to:", match.name, "| Chat ID:", match.telegram_chat_id);
-        
-        // ADDED: Gender to the message
+      // 🛡️ PERFORMANCE FIX: Send Telegram messages in parallel using Promise.all
+      // 🛡️ XSS FIX: Escape user input before putting into HTML message
+      const safeName = escapeHtml(data.name);
+      const safeCommunity = escapeHtml(data.community || 'Not specified');
+      const safeGender = data.gender ? escapeHtml(data.gender.charAt(0).toUpperCase() + data.gender.slice(1)) : 'Not specified';
+
+      await Promise.all(matchedPaidUsers.map(match => {
         const msg = `
 🌟 <b>New Match Alert!</b>
 
 A new profile matching your preferences just registered.
 
-<b>Name:</b> ${data.name}
+<b>Name:</b> ${safeName}
 <b>Age:</b> ${newUserAge || 'Not specified'}
-<b>Gender:</b> ${data.gender ? data.gender.charAt(0).toUpperCase() + data.gender.slice(1) : 'Not specified'}
-<b>Community:</b> ${data.community || 'Not specified'}
+<b>Gender:</b> ${safeGender}
+<b>Community:</b> ${safeCommunity}
 
 <a href="https://vivaha-frontend.vercel.app/profile/${userId}">View Profile</a>
         `;
         
-        await sendTelegram(match.telegram_chat_id, msg);
-      }
+        return sendTelegram(match.telegram_chat_id, msg).catch(() => null);
+      }));
     } else {
       console.log("No telegram-enabled users found.");
     }
@@ -181,7 +186,13 @@ A new profile matching your preferences just registered.
     res.json({ message: "Registration successful", userId });
   } catch (err) {
     console.error("Signup error:", err);
-    res.status(500).json({ error: err.message });
+    
+    // 🛡️ ERROR MASKING FIX: Don't expose raw DB errors to client
+    let errorMessage = "Registration failed. Please try again.";
+    if (err.message?.includes("already registered")) errorMessage = "This email is already registered.";
+    if (err.message?.includes("password")) errorMessage = "Password is too weak.";
+    
+    res.status(400).json({ error: errorMessage });
   }
 });
 
