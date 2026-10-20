@@ -1,6 +1,8 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAuth } from '../utils/auth.js'; // 🛡️ Added
+import { publicUser } from '../utils/privacy.js'; // 🛡️ Added
 
 dotenv.config();
 const router = express.Router();
@@ -9,6 +11,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
+// 🛡️ Helper to escape PostgREST special characters
+const escapeLike = (str) => {
+  if (!str) return str;
+  return str.replace(/[%_,()]/g, '\\$&');
+};
 
 // ============================================
 // HELPER: Get user plan tier
@@ -49,18 +57,18 @@ function computeAgeFromDob(dob) {
 // ============================================
 // 1. ADVANCED SEARCH (Premium only filters)
 // ============================================
-router.get('/advanced-search', async (req, res) => {
+router.get('/advanced-search', requireAuth, async (req, res) => {
+  const viewerId = req.userId; // 🛡️ From JWT, not query
+
   const {
-    viewerId,
     gender, age_min, age_max, location, community, religion,
     education, income, marital_status, food_pref, has_horoscope, verified_only
   } = req.query;
 
   try {
-    const plan = viewerId ? await getUserPlan(viewerId) : 'free';
+    const plan = await getUserPlan(viewerId);
     const isPremium = plan === 'gold' || plan === 'platinum';
 
-    // Check if user tried to use premium filters
     const usingPremiumFilters =
       education || income || marital_status || food_pref ||
       has_horoscope === 'true' || verified_only === 'true';
@@ -72,28 +80,24 @@ router.get('/advanced-search', async (req, res) => {
       });
     }
 
-    // ============================================
-    // Build query — case-insensitive matching
-    // ============================================
     let query = supabaseAdmin.from('users').select('*').eq('is_suspended', false);
 
-    // Basic filters (always available) — ilike for text fields
     if (gender) query = query.ilike('gender', gender);
 
-    // Location: match `location` OR `custom_fields->>place` (like basic search)
+    // 🛡️ FIX: Escape location to prevent SQL Injection
     if (location) {
-      query = query.or(`location.ilike.%${location}%,custom_fields->>place.ilike.%${location}%`);
+      const safeLoc = escapeLike(location);
+      query = query.or(`location.ilike.%${safeLoc}%,custom_fields->>place.ilike.%${safeLoc}%`);
     }
 
-    if (community) query = query.ilike('community', community);
-    if (religion) query = query.ilike('religion', religion);
+    if (community) query = query.ilike('community', escapeLike(community));
+    if (religion) query = query.ilike('religion', escapeLike(religion));
 
-    // Premium filters — case-insensitive where appropriate
     if (isPremium) {
-      if (education) query = query.ilike('education', `%${education}%`);
-      if (income) query = query.ilike('income', `%${income}%`);
-      if (marital_status) query = query.ilike('marital_status', `%${marital_status}%`);
-      if (food_pref) query = query.ilike('food_pref', `%${food_pref}%`);
+      if (education) query = query.ilike('education', `%${escapeLike(education)}%`);
+      if (income) query = query.ilike('income', `%${escapeLike(income)}%`);
+      if (marital_status) query = query.ilike('marital_status', `%${escapeLike(marital_status)}%`);
+      if (food_pref) query = query.ilike('food_pref', `%${escapeLike(food_pref)}%`);
       if (has_horoscope === 'true') query = query.not('rasi', 'is', null);
       if (verified_only === 'true') query = query.eq('is_verified', true);
     }
@@ -102,10 +106,6 @@ router.get('/advanced-search', async (req, res) => {
     if (error) throw error;
 
     const now = new Date();
-
-    // ============================================
-    // Age filter with DOB fallback (JS level)
-    // ============================================
     const ageMin = age_min ? parseInt(age_min) : null;
     const ageMax = age_max ? parseInt(age_max) : null;
 
@@ -117,13 +117,12 @@ router.get('/advanced-search', async (req, res) => {
     const ageFiltered = enriched.filter((u) => {
       if (ageMin === null && ageMax === null) return true;
       const age = u._finalAge;
-      if (age === null || age === undefined || age === 0) return true; // include unknown ages
+      if (age === null || age === undefined || age === 0) return true;
       if (ageMin !== null && age < ageMin) return false;
       if (ageMax !== null && age > ageMax) return false;
       return true;
     });
 
-    // Sort: boosted → verified → rest
     const sorted = ageFiltered.sort((a, b) => {
       const aBoost = a.boost_expires_at && new Date(a.boost_expires_at) > now;
       const bBoost = b.boost_expires_at && new Date(b.boost_expires_at) > now;
@@ -134,13 +133,23 @@ router.get('/advanced-search', async (req, res) => {
       return 0;
     });
 
+    // 🛡️ FIX: Mask data using publicUser & hide private photos
     const masked = sorted.slice(0, 100).map((u) => {
       const { _finalAge, ...rest } = u;
+      const isPublicContact = u.contact_privacy === 'public';
+      
+      // publicUser strips telegram, role, etc. keepContact=true keeps mobile/email
+      const safeUser = publicUser(rest, isPublicContact);
+
+      // Hide photo if privacy is private
+      if (u.photo_privacy === 'private' || u.photo_privacy === 'matches') {
+        safeUser.photo_url = null;
+        safeUser.should_blur_photo = true;
+      }
+
       return {
-        ...rest,
+        ...safeUser,
         age: _finalAge,
-        mobile: u.contact_privacy === 'public' ? u.mobile : null,
-        email: u.contact_privacy === 'public' ? u.email : null,
         is_boosted: u.boost_expires_at ? new Date(u.boost_expires_at) > now : false,
       };
     });
@@ -160,8 +169,13 @@ router.get('/advanced-search', async (req, res) => {
 // ============================================
 // 2. TIERED RECOMMENDATIONS
 // ============================================
-router.get('/recommendations/:userId', async (req, res) => {
+router.get('/recommendations/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
+
+  // 🛡️ FIX: Ensure user is requesting their own recommendations
+  if (userId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
 
   try {
     const plan = await getUserPlan(userId);
@@ -227,12 +241,22 @@ router.get('/recommendations/:userId', async (req, res) => {
       .sort((a, b) => b.match_score - a.match_score)
       .slice(0, count);
 
+    // 🛡️ FIX: Mask data
+    const safeScored = scored.map(u => {
+      const safeUser = publicUser(u, false); // false = hide contact info
+      if (u.photo_privacy === 'private' || u.photo_privacy === 'matches') {
+        safeUser.photo_url = null;
+        safeUser.should_blur_photo = true;
+      }
+      return safeUser;
+    });
+
     res.json({
-      recommendations: scored,
+      recommendations: safeScored,
       plan,
       count,
       exclusive,
-      total_available: scored.length,
+      total_available: safeScored.length,
     });
   } catch (err) {
     console.error("Recommendations error:", err);
@@ -243,8 +267,13 @@ router.get('/recommendations/:userId', async (req, res) => {
 // ============================================
 // 3. PLATINUM-ONLY "PREMIUM MATCHES"
 // ============================================
-router.get('/premium-matches/:userId', async (req, res) => {
+router.get('/premium-matches/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
+
+  // 🛡️ FIX: Ensure user is requesting their own matches
+  if (userId !== req.userId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
 
   try {
     const plan = await getUserPlan(userId);
@@ -259,6 +288,8 @@ router.get('/premium-matches/:userId', async (req, res) => {
     const { data: me } = await supabaseAdmin
       .from('users').select('*').eq('id', userId).single();
 
+    if (!me) return res.status(404).json({ error: "User not found" });
+
     const oppositeGender = (me.gender || '').toLowerCase() === 'male' ? 'female' : 'male';
 
     const { data, error } = await supabaseAdmin
@@ -272,8 +303,19 @@ router.get('/premium-matches/:userId', async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ matches: data || [], plan });
+    // 🛡️ FIX: Mask data
+    const safeMatches = (data || []).map(u => {
+      const safeUser = publicUser(u, false);
+      if (u.photo_privacy === 'private' || u.photo_privacy === 'matches') {
+        safeUser.photo_url = null;
+        safeUser.should_blur_photo = true;
+      }
+      return safeUser;
+    });
+
+    res.json({ matches: safeMatches, plan });
   } catch (err) {
+    console.error("Premium matches error:", err);
     res.status(500).json({ error: err.message });
   }
 });
