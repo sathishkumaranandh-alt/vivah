@@ -60,7 +60,7 @@ router.post('/create-order', requireAuth, async (req, res) => {
       order_note: `Upgrade to ${planName} plan`,
     };
 
-    const response = await Cashfree.PGCreateOrder(request);
+    const response = await Cashfree.PGCreateOrder("2023-08-01", request);
 
     res.json({
       success: true,
@@ -97,7 +97,7 @@ router.post('/verify-payment', requireAuth, async (req, res) => {
   if (!order_id) return res.status(400).json({ error: 'Missing order_id' });
 
   try {
-    const response = await Cashfree.PGFetchOrder(order_id);
+    const response = await Cashfree.PGFetchOrder("2023-08-01", order_id);
     const orderStatus = response.data.order_status;
 
     if (orderStatus !== 'PAID') {
