@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import paymentRoutes from './routes/payments.js';
 
 
 // Route Imports
@@ -150,7 +151,9 @@ app.use('/boost', boostRoutes);
 app.use('/premium', premiumRoutes);
 app.use('/plans', plansRoutes);
 app.use('/telegram', telegramRoutes);
+app.use('/payments', paymentRoutes);
 app.use('/blocks', blockRoutes);
+
 
 // 🛡️ FIX: Mount auditRoutes on root (/) as well so /settings works
 app.use('/', auditRoutes);
