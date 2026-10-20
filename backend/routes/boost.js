@@ -1,7 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import { requireAuth, requireAdmin } from '../utils/auth.js'; // 🛡️ Added Security
+import { requireAuth, requireAdmin } from '../utils/auth.js';
 
 dotenv.config();
 const router = express.Router();
@@ -15,7 +15,7 @@ const BOOST_PRICE = 199;
 const BOOST_DURATION_DAYS = 7;
 
 // ============================================
-// GET boost status for a user
+// GET boost status for a user (🔒 Secured)
 // ============================================
 router.get('/status/:userId', requireAuth, async (req, res) => {
   const { userId } = req.params;
@@ -36,10 +36,7 @@ router.get('/status/:userId', requireAuth, async (req, res) => {
       .eq('id', userId)
       .maybeSingle();
 
-    if (error) {
-      console.error("Boost status query error:", error);
-      throw error;
-    }
+    if (error) throw error;
 
     if (!data) {
       return res.json({
@@ -65,42 +62,38 @@ router.get('/status/:userId', requireAuth, async (req, res) => {
       duration: BOOST_DURATION_DAYS,
     });
   } catch (err) {
-    console.error("Boost status error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ============================================
-// ACTIVATE boost
+// ACTIVATE boost (Paid / Simulated)
 // ============================================
 router.post('/activate', requireAuth, async (req, res) => {
-  const userId = req.userId; // 🔒 Securely taken from JWT, not body
+  const userId = req.userId;
 
   try {
+    // 🛡️ SECURITY FIX: Block simulated payments in production unless explicitly enabled
+    const allowSimulated = process.env.ALLOW_SIMULATED_PAYMENTS === 'true';
+    if (!allowSimulated) {
+      return res.status(402).json({ 
+        error: "Payment gateway not integrated. Please contact admin to activate boost.",
+        requiresPayment: true 
+      });
+    }
+
     const { data: user, error: fetchErr } = await supabaseAdmin
       .from('users')
       .select('id, boost_expires_at')
       .eq('id', userId)
       .maybeSingle();
 
-    if (fetchErr) {
-      console.error("Boost activate fetch error:", fetchErr);
-      throw fetchErr;
-    }
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
+    if (fetchErr || !user) return res.status(404).json({ error: "User not found" });
 
     const now = new Date();
-    const currentExpiry = user.boost_expires_at
-      ? new Date(user.boost_expires_at)
-      : null;
-
+    const currentExpiry = user.boost_expires_at ? new Date(user.boost_expires_at) : null;
     const startFrom = currentExpiry && currentExpiry > now ? currentExpiry : now;
-    const newExpiry = new Date(
-      startFrom.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000
-    );
+    const newExpiry = new Date(startFrom.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000);
 
     const { error: updateErr } = await supabaseAdmin
       .from('users')
@@ -116,9 +109,7 @@ router.post('/activate', requireAuth, async (req, res) => {
         amount: BOOST_PRICE,
         payment_id: `SIM_BOOST_${Date.now()}`,
       });
-    } catch (logErr) {
-      console.warn("Boost history log failed:", logErr);
-    }
+    } catch (logErr) { console.warn("Boost history log failed:", logErr); }
 
     res.json({
       success: true,
@@ -126,77 +117,12 @@ router.post('/activate', requireAuth, async (req, res) => {
       message: `Boost activated for ${BOOST_DURATION_DAYS} days!`,
     });
   } catch (err) {
-    console.error("Boost activate error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ============================================
-// ADMIN: Grant free boost
-// ============================================
-router.post('/admin/grant/:userId', requireAuth, requireAdmin, async (req, res) => {
-  const { userId } = req.params;
-  const { days = 7 } = req.body;
-
-  try {
-    const { data: user, error: fetchErr } = await supabaseAdmin
-      .from('users')
-      .select('id')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (fetchErr) throw fetchErr;
-    if (!user) return res.status(404).json({ error: "User not found" });
-
-    const now = new Date();
-    const newExpiry = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-
-    const { error } = await supabaseAdmin
-      .from('users')
-      .update({ boost_expires_at: newExpiry.toISOString() })
-      .eq('id', userId);
-
-    if (error) throw error;
-
-    try {
-      await supabaseAdmin.from('boost_history').insert({
-        user_id: userId,
-        expires_at: newExpiry.toISOString(),
-        amount: 0,
-        payment_id: `ADMIN_GRANT_${Date.now()}`,
-      });
-    } catch (logErr) {
-      console.warn("Boost history log failed:", logErr);
-    }
-
-    res.json({ success: true, expiresAt: newExpiry.toISOString() });
-  } catch (err) {
-    console.error("Admin grant boost error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ============================================
-// ADMIN: Remove boost
-// ============================================
-router.post('/admin/remove/:userId', requireAuth, requireAdmin, async (req, res) => {
-  const { userId } = req.params;
-
-  try {
-    const { error } = await supabaseAdmin
-      .from('users')
-      .update({ boost_expires_at: null })
-      .eq('id', userId);
-
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Admin remove boost error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-// ============================================
-// CLAIM FREE BOOST (🔒 Auth Required & Plan Check)
+// CLAIM FREE BOOST (🔒 Auth & Limit)
 // ============================================
 router.post('/claim-free', requireAuth, async (req, res) => {
   const userId = req.userId;
@@ -225,14 +151,22 @@ router.post('/claim-free', requireAuth, async (req, res) => {
       return res.status(403).json({ error: "Your plan does not include free boosts." });
     }
 
-    // 2. Activate boost (same logic as /activate)
-    const { data: user, error: fetchErr } = await supabaseAdmin.from('users').select('id, boost_expires_at').eq('id', userId).maybeSingle();
+    // 2. Fetch user details
+    const { data: user, error: fetchErr } = await supabaseAdmin
+      .from('users')
+      .select('id, boost_expires_at')
+      .eq('id', userId)
+      .maybeSingle();
+
     if (fetchErr || !user) return res.status(404).json({ error: "User not found" });
 
+    // 🛡️ SECURITY FIX: Prevent infinite stacking
     const now = new Date();
-    const currentExpiry = user.boost_expires_at ? new Date(user.boost_expires_at) : null;
-    const startFrom = currentExpiry && currentExpiry > now ? currentExpiry : now;
-    const newExpiry = new Date(startFrom.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000);
+    if (user.boost_expires_at && new Date(user.boost_expires_at) > now) {
+      return res.status(400).json({ error: "You already have an active boost." });
+    }
+
+    const newExpiry = new Date(now.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000);
 
     await supabaseAdmin.from('users').update({ boost_expires_at: newExpiry.toISOString() }).eq('id', userId);
 
@@ -250,4 +184,65 @@ router.post('/claim-free', requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ============================================
+// ADMIN: Grant free boost
+// ============================================
+router.post('/admin/grant/:userId', requireAuth, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { days = 7 } = req.body;
+
+  try {
+    const { data: user, error: fetchErr } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (fetchErr || !user) return res.status(404).json({ error: "User not found" });
+
+    const now = new Date();
+    const newExpiry = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+
+    const { error } = await supabaseAdmin
+      .from('users')
+      .update({ boost_expires_at: newExpiry.toISOString() })
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    try {
+      await supabaseAdmin.from('boost_history').insert({
+        user_id: userId,
+        expires_at: newExpiry.toISOString(),
+        amount: 0,
+        payment_id: `ADMIN_GRANT_${Date.now()}`,
+      });
+    } catch (logErr) {}
+
+    res.json({ success: true, expiresAt: newExpiry.toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================
+// ADMIN: Remove boost
+// ============================================
+router.post('/admin/remove/:userId', requireAuth, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const { error } = await supabaseAdmin
+      .from('users')
+      .update({ boost_expires_at: null })
+      .eq('id', userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
