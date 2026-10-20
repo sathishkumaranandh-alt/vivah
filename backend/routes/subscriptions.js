@@ -1,6 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
-import { requireAdmin } from "../utils/auth.js";
+import { requireAdmin, requireAuth } from "../utils/auth.js"; // 🛡️ Added requireAuth
 
 const router = express.Router();
 
@@ -14,12 +14,16 @@ const PLANS = {
 };
 
 // ============================================================
-// GET /subscriptions/user/:userId
-// Get current user's subscription
+// GET /subscriptions/user/:userId (🔒 Auth Required)
 // ============================================================
-router.get("/user/:userId", async (req, res) => {
+router.get("/user/:userId", requireAuth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // 🛡️ SECURITY FIX: Only allow users to view their own subscription (or admin)
+    if (userId !== req.userId) {
+      return res.status(403).json({ error: "Forbidden: You cannot view others' subscriptions" });
+    }
 
     const { data, error } = await supabase
       .from("subscriptions")
@@ -65,18 +69,68 @@ router.get("/user/:userId", async (req, res) => {
 });
 
 // ============================================================
-// POST /subscriptions/create
-// ✅ FIXED: Dynamic plan lookup (DB first, then fallback)
+// GET /subscriptions/my-subscription (🔒 New secure route)
 // ============================================================
-router.post("/create", async (req, res) => {
+router.get("/my-subscription", requireAuth, async (req, res) => {
   try {
-    const { user_id, plan } = req.body;
+    const userId = req.userId;
 
-    if (!user_id || !plan) {
-      return res.status(400).json({ error: "Missing user_id or plan" });
+    const { data, error } = await supabase
+      .from("subscriptions")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!data) {
+      return res.json({ subscription: null });
     }
 
-    // 🔧 Dynamic plan lookup — check DB first, then fallback to hardcoded
+    let subscription = data;
+    if (
+      subscription.expires_at &&
+      new Date(subscription.expires_at) < new Date() &&
+      subscription.status === "active"
+    ) {
+      await supabase
+        .from("subscriptions")
+        .update({ status: "expired", updated_at: new Date().toISOString() })
+        .eq("id", subscription.id);
+      subscription = { ...subscription, status: "expired" };
+    }
+
+    res.json({ subscription });
+  } catch (err) {
+    console.error("My subscription error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// POST /subscriptions/create (🔒 Auth & Payment Gate)
+// ============================================================
+router.post("/create", requireAuth, async (req, res) => {
+  try {
+    // 🛡️ SECURITY FIX: user_id comes from JWT, not body
+    const user_id = req.userId;
+    const { plan } = req.body;
+
+    if (!plan) {
+      return res.status(400).json({ error: "Missing plan" });
+    }
+
+    // 🛡️ SECURITY FIX: Block simulated payments in production unless explicitly enabled
+    const allowSimulated = process.env.ALLOW_SIMULATED_PAYMENTS === 'true';
+    if (!allowSimulated) {
+      return res.status(402).json({ 
+        error: "Payment gateway not integrated. Please contact admin to grant premium.",
+        requiresPayment: true 
+      });
+    }
+
     let planConfig = null;
 
     // Try DB lookup (case-insensitive)
@@ -102,8 +156,6 @@ router.post("/create", async (req, res) => {
     const now = new Date();
     let expiresAt = null;
 
-    // Free plan = no expiry; paid plans = duration_days
-    // 9999 days = Lifetime (no expiry set)
     if (
       planConfig.durationDays &&
       planConfig.durationDays !== 9999 &&
@@ -121,13 +173,12 @@ router.post("/create", async (req, res) => {
       .eq("user_id", user_id)
       .eq("status", "active");
 
-    // Create new subscription
     const { data, error } = await supabase
       .from("subscriptions")
       .insert([
         {
           user_id,
-          plan: planConfig.name.toLowerCase(), // ✅ lowercase for consistency
+          plan: planConfig.name.toLowerCase(),
           status: "active",
           amount: planConfig.price,
           started_at: now.toISOString(),
@@ -151,16 +202,12 @@ router.post("/create", async (req, res) => {
 });
 
 // ============================================================
-// POST /subscriptions/cancel
-// Cancel a subscription
+// POST /subscriptions/cancel (🔒 Auth Required)
 // ============================================================
-router.post("/cancel", async (req, res) => {
+router.post("/cancel", requireAuth, async (req, res) => {
   try {
-    const { user_id } = req.body;
-
-    if (!user_id) {
-      return res.status(400).json({ error: "Missing user_id" });
-    }
+    // 🛡️ SECURITY FIX: user_id comes from JWT
+    const user_id = req.userId;
 
     const { data, error } = await supabase
       .from("subscriptions")
@@ -185,7 +232,6 @@ router.post("/cancel", async (req, res) => {
 
 // ============================================================
 // 🔒 ADMIN: GET /subscriptions/admin/all
-// Get all subscriptions with user info
 // ============================================================
 router.get("/admin/all", requireAdmin, async (req, res) => {
   try {
@@ -223,7 +269,6 @@ router.get("/admin/all", requireAdmin, async (req, res) => {
 
 // ============================================================
 // 🔒 ADMIN: GET /subscriptions/admin/stats
-// Revenue & subscription statistics
 // ============================================================
 router.get("/admin/stats", requireAdmin, async (req, res) => {
   try {
@@ -261,7 +306,6 @@ router.get("/admin/stats", requireAdmin, async (req, res) => {
 
 // ============================================================
 // 🔒 ADMIN: PATCH /subscriptions/admin/grant/:userId
-// Grant free premium to a user
 // ============================================================
 router.patch("/admin/grant/:userId", requireAdmin, async (req, res) => {
   try {
@@ -314,7 +358,6 @@ router.patch("/admin/grant/:userId", requireAdmin, async (req, res) => {
 
 // ============================================================
 // 🔒 ADMIN: PATCH /subscriptions/admin/extend/:userId
-// Extend a subscription
 // ============================================================
 router.patch("/admin/extend/:userId", requireAdmin, async (req, res) => {
   try {
@@ -369,7 +412,6 @@ router.patch("/admin/extend/:userId", requireAdmin, async (req, res) => {
 
 // ============================================================
 // 🔒 ADMIN: DELETE /subscriptions/admin/:subscriptionId
-// Delete a subscription record
 // ============================================================
 router.delete("/admin/:subscriptionId", requireAdmin, async (req, res) => {
   try {
