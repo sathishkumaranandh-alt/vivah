@@ -1,23 +1,37 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
-import { requireAuth } from "../utils/auth.js"; // 🛡️ Added Security
+import { requireAuth } from "../utils/auth.js"; 
 
 const router = express.Router();
 
 // ============================================================
-// POST /notifications/create
+// POST /notifications/create (🔒 Secured)
 // Create a notification (internal use)
 // ============================================================
-router.post("/create", async (req, res) => {
+router.post("/create", requireAuth, async (req, res) => {
   try {
-    const { user_id, actor_id, type, title, message, link } = req.body;
+    const { user_id, type, title, message, link } = req.body;
+    const actor_id = req.userId; // 🛡️ SECURITY FIX: Actor must be the logged-in user
+
     if (!user_id || !type || !title) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    // 🛡️ SECURITY FIX: Prevent Phishing links (must be internal route)
+    if (link && !link.startsWith("/")) {
+      return res.status(400).json({ error: "Invalid link. Only internal links allowed." });
+    }
+
     const { data, error } = await supabase
       .from("notifications")
-      .insert([{ user_id, actor_id: actor_id || null, type, title, message: message || null, link: link || null }])
+      .insert([{ 
+        user_id, 
+        actor_id, 
+        type, 
+        title, 
+        message: message || null, 
+        link: link || null 
+      }])
       .select()
       .single();
 
