@@ -35,8 +35,30 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ============================================
-// 🛡️ 1. SECURITY HEADERS (Helmet)
+// 🛡️ 1. SECURITY HEADERS (no extra package needed)
 // ============================================
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'); // API is called from the frontend domain
+  res.setHeader('Cache-Control', 'no-store'); // API responses contain private data
+
+  // 🛡️ Never leak internal DB / library error text on 5xx responses.
+  // (Routes that deliberately show a message set res.locals.exposeError = true)
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    if (res.statusCode >= 500 && body && typeof body === 'object' && body.error && !res.locals.exposeError) {
+      console.error('❌ 5xx hidden from client:', req.method, req.path, '→', body.error);
+      body = { ...body, error: 'Something went wrong. Please try again.' };
+      delete body.details;
+    }
+    return originalJson(body);
+  };
+  next();
+});
 
 
 // ============================================
@@ -124,6 +146,8 @@ app.use('/photo-requests/request', actionLimiter);
 app.use('/contact-requests/request', actionLimiter);
 app.use('/reports', actionLimiter);
 app.use('/boost', actionLimiter);
+app.use('/payments', actionLimiter);
+app.use('/telegram/generate-token', actionLimiter);
 
 app.use('/auth', authLimiter);
 app.use(generalLimiter); 
@@ -193,3 +217,4 @@ app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'production'}`);
 });
+        
