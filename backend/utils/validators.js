@@ -24,7 +24,7 @@ export const interestSchema = z.object({
 export const messageSchema = z.object({
   receiver_id: z.string().uuid({ message: "Invalid receiver ID format" }),
   text: z.string().max(1000, { message: "Message too long (max 1000 chars)" }).optional(),
-  image_url: z.string().url({ message: "Invalid image URL" }).optional(),
+  image_url: z.string().url({ message: "Invalid image URL" }).max(2048).refine((u) => u.startsWith("https://"), { message: "Image URL must be https" }).optional(),
   message_type: z.enum(["text", "image"]).optional(),
 }).refine(data => data.text || data.image_url, {
   message: "Message must contain either text or an image",
@@ -37,3 +37,4 @@ export const profileUpdateSchema = z.object({
   mobile: z.string().regex(/^[0-9]{10}$/, { message: "Mobile must be 10 digits" }).optional().nullable(),
   bio: z.string().max(500, { message: "Bio too long" }).optional().nullable(),
 });
+  
