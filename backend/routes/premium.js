@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js'; // 🛡️ Added
 import { publicUser } from '../utils/privacy.js'; // 🛡️ Added
+import { safeFilterText } from '../utils/sanitize.js';
 
 dotenv.config();
 const router = express.Router();
@@ -86,8 +87,10 @@ router.get('/advanced-search', requireAuth, async (req, res) => {
 
     // 🛡️ FIX: Escape location to prevent SQL Injection
     if (location) {
-      const safeLoc = escapeLike(location);
-      query = query.or(`location.ilike.%${safeLoc}%,custom_fields->>place.ilike.%${safeLoc}%`);
+      const safeLoc = safeFilterText(location);
+      if (safeLoc) {
+        query = query.or(`location.ilike.%${safeLoc}%,custom_fields->>place.ilike.%${safeLoc}%`);
+      }
     }
 
     if (community) query = query.ilike('community', escapeLike(community));
@@ -321,3 +324,4 @@ router.get('/premium-matches/:userId', requireAuth, async (req, res) => {
 });
 
 export default router;
+      
