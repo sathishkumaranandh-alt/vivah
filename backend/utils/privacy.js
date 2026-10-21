@@ -25,6 +25,16 @@ export async function computePhotoAccess(supabaseAdmin, viewerId, ownerId, owner
   if (viewerId === ownerId) return true; // Owner always sees
 
   try {
+    // 0. Owner explicitly approved this viewer → always allowed (wins over paid lock)
+    const { data: approved } = await supabaseAdmin
+      .from('photo_requests')
+      .select('id')
+      .eq('requester_id', viewerId)
+      .eq('owner_id', ownerId)
+      .eq('status', 'approved')
+      .limit(1);
+    if (approved && approved.length > 0) return true;
+
     // 1. Check if owner is paid and viewer is free
     const { data: sub } = await supabaseAdmin
       .from('subscriptions')
