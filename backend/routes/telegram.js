@@ -16,13 +16,32 @@ const supabaseAdmin = createClient(
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 
+// 🛡️ In-memory wrong-code counter per Telegram chat (resets after 15 min)
+const LINK_WINDOW_MS = 15 * 60 * 1000;
+const LINK_MAX_FAILS = 5;
+const failedLinks = new Map(); // chatId -> { count, first }
+
+function isLinkBlocked(chatId) {
+  const e = failedLinks.get(chatId);
+  if (!e) return false;
+  if (Date.now() - e.first > LINK_WINDOW_MS) { failedLinks.delete(chatId); return false; }
+  return e.count >= LINK_MAX_FAILS;
+}
+function noteFailedLink(chatId) {
+  const now = Date.now();
+  const e = failedLinks.get(chatId);
+  if (!e || now - e.first > LINK_WINDOW_MS) failedLinks.set(chatId, { count: 1, first: now });
+  else e.count += 1;
+  if (failedLinks.size > 5000) failedLinks.clear(); // memory safety
+}
+
 // ============================================
 // 🛡️ NEW: GENERATE SECURE LINK TOKEN
 // ============================================
 router.post('/generate-token', requireAuth, async (req, res) => {
   try {
-    // 🛡️ SECURITY FIX: Use crypto.randomInt instead of Math.random()
-    const token = crypto.randomInt(100000, 999999).toString();
+    // 🛡️ 12-character random code (the old 6-digit code could be guessed by brute force)
+    const token = crypto.randomBytes(6).toString('hex');
     const expiresAt = Date.now() + 15 * 60 * 1000; // Valid for 15 mins
 
     const { data: user, error: fetchError } = await supabaseAdmin
@@ -62,22 +81,13 @@ router.post('/generate-token', requireAuth, async (req, res) => {
 // ============================================
 // 🔒 MANUAL LINK / UNLINK (Now Requires Auth)
 // ============================================
+// 🛡️ DISABLED: this let anyone attach ANY Telegram chat id to their account
+// (the victim would then receive spam). Linking now only works through the
+// secure code flow: /telegram/generate-token  →  /start <code> in the bot.
 router.post('/link', requireAuth, async (req, res) => {
-  const { chatId } = req.body;
-  const userId = req.userId; // 🔒 From JWT
-
-  if (!chatId) return res.status(400).json({ error: 'Missing chatId' });
-
-  try {
-    const { error } = await supabaseAdmin
-      .from('users')
-      .update({ telegram_chat_id: String(chatId), telegram_opt_in: true })
-      .eq('id', userId);
-    if (error) throw error;
-    res.json({ success: true, message: 'Telegram linked' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(410).json({
+    error: 'Manual linking is disabled. Use "Connect Telegram" in Settings.',
+  });
 });
 
 router.post('/unlink', requireAuth, async (req, res) => {
@@ -107,8 +117,11 @@ router.post('/webhook', async (req, res) => {
       return res.sendStatus(500);
     }
 
-    if (secretHeader !== WEBHOOK_SECRET) {
-      console.warn('🚫 Webhook unauthorized:', secretHeader);
+    // 🛡️ Constant-time compare; never log the (attacker supplied) header value
+    const a = Buffer.from(String(secretHeader || ''));
+    const b = Buffer.from(WEBHOOK_SECRET);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn('🚫 Webhook unauthorized');
       return res.sendStatus(403);
     }
 
@@ -133,6 +146,15 @@ router.post('/webhook', async (req, res) => {
         return res.json({ ok: true });
       }
 
+      // 🛡️ Brute-force guard: max 5 wrong codes per chat per 15 minutes
+      if (isLinkBlocked(chatId)) {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          chat_id: chatId,
+          text: `⏳ Too many wrong attempts. Please try again after 15 minutes.`,
+        });
+        return res.json({ ok: true });
+      }
+
       // 🔒 Find user by token using Supabase JSON query
       const { data: users, error } = await supabaseAdmin
         .from('users')
@@ -140,6 +162,7 @@ router.post('/webhook', async (req, res) => {
         .eq('custom_permissions->>telegram_link_token', token);
 
       if (error || !users || users.length === 0) {
+        noteFailedLink(chatId);
         await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
           chat_id: chatId,
           text: `❌ Invalid or expired link code. Please generate a new one on the website.`,
@@ -231,3 +254,4 @@ router.post('/webhook', async (req, res) => {
 });
 
 export default router;
+  
