@@ -17,8 +17,18 @@ router.post("/create", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    // 🛡️ Type checks + length limits (stops spam / oversized payloads)
+    const isUuid = (v) => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+    if (!isUuid(user_id) || typeof type !== "string" || type.length > 50 ||
+        typeof title !== "string" || title.length > 200 ||
+        (message != null && (typeof message !== "string" || message.length > 1000)) ||
+        (link != null && (typeof link !== "string" || link.length > 300))) {
+      return res.status(400).json({ error: "Invalid notification data" });
+    }
+
     // 🛡️ SECURITY FIX: Prevent Phishing links (must be internal route)
-    if (link && !link.startsWith("/")) {
+    // "//evil.com" also starts with "/" but is an external link — block it too
+    if (link && (!link.startsWith("/") || link.startsWith("//") || link.includes("\\"))) {
       return res.status(400).json({ error: "Invalid link. Only internal links allowed." });
     }
 
@@ -186,3 +196,4 @@ router.patch("/read-by-actor/:userId/:actorId", requireAuth, async (req, res) =>
 });
 
 export default router;
+                                  
