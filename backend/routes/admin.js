@@ -1,6 +1,7 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { requireAdmin } from '../utils/auth.js';
 
 dotenv.config();
 
@@ -13,7 +14,8 @@ const supabaseAdmin = createClient(
 );
 
 // DELETE /admin/users/:userId
-router.delete('/users/:userId', async (req, res) => {
+// 🛡️ Was completely open (anyone could delete any user) — now admin only
+router.delete('/users/:userId', requireAdmin, async (req, res) => {
   const { userId } = req.params;
 
   try {
