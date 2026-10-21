@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js';
 import { computePhotoAccess } from '../utils/privacy.js';
+import { isHttpsUrl } from '../utils/sanitize.js';
 
 dotenv.config();
 const router = express.Router();
@@ -82,6 +83,9 @@ router.get('/:userId', requireAuth, async (req, res) => {
 router.post('/add', requireAuth, async (req, res) => {
   const { photo_url, is_primary, is_private } = req.body;
   const user_id = req.userId;
+
+  // 🛡️ Only https image links are accepted
+  if (!isHttpsUrl(photo_url)) return res.status(400).json({ error: "Invalid photo URL" });
 
   try {
     const maxPhotos = await getUserMaxPhotos(user_id);
@@ -166,3 +170,4 @@ router.patch('/:photoId/primary', requireAuth, async (req, res) => {
 });
 
 export default router;
+      
