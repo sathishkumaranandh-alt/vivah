@@ -22,3 +22,4 @@ export function isHttpsUrl(value, maxLen = 2048) {
     return false;
   }
 }
+  
