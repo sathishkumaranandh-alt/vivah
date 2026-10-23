@@ -168,21 +168,33 @@ router.get("/conversations", requireAuth, async (req, res) => {
 
     const otherIds = Array.from(conversationMap.keys());
     let profiles = [];
+    let approvedPhotoOwners = new Set();
     if (otherIds.length > 0) {
       const { data: profileData } = await supabase
         .from("users")
-        .select("id, name, photo_url, age, location, last_seen")
+        .select("id, name, photo_url, photo_privacy, age, location, last_seen")
         .in("id", otherIds);
       profiles = profileData || [];
+
+      // 🔒 Owners who approved this viewer's photo request (so "Nobody" can still be lifted by the owner)
+      const { data: approvals } = await supabase
+        .from("photo_requests")
+        .select("owner_id")
+        .eq("requester_id", userId)
+        .eq("status", "approved")
+        .in("owner_id", otherIds);
+      approvedPhotoOwners = new Set((approvals || []).map((a) => a.owner_id));
     }
 
     const conversations = Array.from(conversationMap.values()).map((conv) => {
       const profile = profiles.find((p) => p.id === conv.otherUserId);
       const isOnline = isUserOnline(profile?.last_seen);
+      // 🔒 Respect "Nobody" (private) photo privacy in the chat list
+      const hidePhoto = profile?.photo_privacy === "private" && !approvedPhotoOwners.has(conv.otherUserId);
       return {
         ...conv,
         name: profile?.name || "Anonymous",
-        photo_url: profile?.photo_url || null,
+        photo_url: hidePhoto ? null : (profile?.photo_url || null),
         age: profile?.age || null,
         location: profile?.location || null,
         isOnline,
