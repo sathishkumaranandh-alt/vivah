@@ -229,6 +229,7 @@ router.get('/list', requireAuth, async (req, res) => {
       let shouldBlur = false;
       if (!isSelf) {
         if (hasPhotoApproved) shouldBlur = false;
+        else if (user.photo_privacy === 'private') shouldBlur = true; // 🔒 owner's "Nobody" beats any plan/permission override
         else if (freeViewingPaid) shouldBlur = true;
         else if (listViewerCanSeeFullPhoto && visitorIsPaid) shouldBlur = false;
         else if (user.photo_privacy === 'private') shouldBlur = true;
@@ -259,4 +260,3 @@ router.get('/list', requireAuth, async (req, res) => {
 });
 
 export default router;
-      
