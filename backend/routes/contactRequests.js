@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { sendTelegram } from "../utils/telegram.js";
 import { requireAuth } from "../utils/auth.js"; // 🛡️ Added Security
+import { isFreeViewingPaid } from "../utils/privacy.js";
 
 dotenv.config();
 const router = express.Router();
@@ -25,6 +26,19 @@ router.post("/request", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Cannot request own contact" });
 
   try {
+    // 🛡️ Already requested / approved? Never reset an existing request back to pending.
+    const { data: existing } = await supabaseAdmin
+      .from("contact_requests").select("*")
+      .eq("requester_id", requester_id).eq("owner_id", owner_id).maybeSingle();
+    if (existing && (existing.status === "approved" || existing.status === "pending")) {
+      return res.json({ request: existing, already: true, status: existing.status });
+    }
+
+    // 🛡️ Free viewer vs paid owner → upgrade needed, not a request
+    if (await isFreeViewingPaid(supabaseAdmin, requester_id, owner_id)) {
+      return res.status(403).json({ error: "Upgrade your plan to view contact details", requiresUpgrade: true });
+    }
+
     const { data, error } = await supabaseAdmin
       .from("contact_requests")
       .upsert(
@@ -233,3 +247,4 @@ router.get("/status/:requesterId/:ownerId", requireAuth, async (req, res) => {
 });
 
 export default router;
+      
