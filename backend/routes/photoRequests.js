@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { sendTelegram } from "../utils/telegram.js";
 import { requireAuth } from "../utils/auth.js"; // 🛡️ Added Security
+import { getPhotoAccess } from "../utils/privacy.js";
 
 dotenv.config();
 const router = express.Router();
@@ -25,6 +26,23 @@ router.post("/request", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Cannot request own photos" });
 
   try {
+    // 🛡️ Already requested / approved? Never reset an existing request back to pending.
+    const { data: existing } = await supabaseAdmin
+      .from("photo_requests").select("*")
+      .eq("requester_id", requester_id).eq("owner_id", owner_id).maybeSingle();
+    if (existing && (existing.status === "approved" || existing.status === "pending")) {
+      return res.json({ request: existing, already: true, status: existing.status });
+    }
+
+    // 🛡️ Photos already visible, or locked by the viewer's PLAN (needs upgrade, not a request)
+    const { data: ownerRow } = await supabaseAdmin.from("users").select("photo_privacy").eq("id", owner_id).maybeSingle();
+    if (!ownerRow) return res.status(404).json({ error: "User not found" });
+    const access = await getPhotoAccess(supabaseAdmin, requester_id, owner_id, ownerRow);
+    if (access.canView) return res.json({ already: true, status: "visible" });
+    if (access.reason === "plan_upgrade") {
+      return res.status(403).json({ error: "Upgrade your plan to view this photo", requiresUpgrade: true });
+    }
+
     const { data, error } = await supabaseAdmin
       .from("photo_requests")
       .upsert(
@@ -234,3 +252,4 @@ router.get("/status/:requesterId/:ownerId", requireAuth, async (req, res) => {
 });
 
 export default router;
+                     
