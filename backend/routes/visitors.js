@@ -1,4 +1,5 @@
 import express from 'express';
+import { LOCKED_PHOTO_URL } from '../utils/privacy.js';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
@@ -182,7 +183,7 @@ router.get('/list', requireAuth, async (req, res) => {
     const listViewerIsPaid = await isPaidUser(userId);
     const listViewerPerms = await getViewerPermissions(userId);
     const listViewerCanViewPaid = listViewerIsPaid || perm(listViewerPerms.can_view_paid_profiles);
-    const listViewerCanSeeFullPhoto = listViewerIsPaid && perm(listViewerPerms.see_full_photo);
+    const listViewerCanSeeFullPhoto = perm(listViewerPerms.see_full_photo);
 
     const paidVisitorIds = new Set();
     if (viewerIds.length > 0) {
@@ -229,11 +230,10 @@ router.get('/list', requireAuth, async (req, res) => {
       let shouldBlur = false;
       if (!isSelf) {
         if (hasPhotoApproved) shouldBlur = false;
-        else if (user.photo_privacy === 'private') shouldBlur = true; // 🔒 owner's "Nobody" beats any plan/permission override
         else if (freeViewingPaid) shouldBlur = true;
-        else if (listViewerCanSeeFullPhoto && visitorIsPaid) shouldBlur = false;
         else if (user.photo_privacy === 'private') shouldBlur = true;
         else if (user.photo_privacy === 'matches' && !matchContext[user.id]) shouldBlur = true;
+        else if (!listViewerCanSeeFullPhoto) shouldBlur = true; // 🛡️ plan permission applies after owner privacy
       }
 
       return {
@@ -242,12 +242,13 @@ router.get('/list', requireAuth, async (req, res) => {
         age: user.age,
         gender: user.gender,
         location: user.location,
-        photo_url: user.photo_url,
+        photo_url: shouldBlur ? LOCKED_PHOTO_URL : user.photo_url,
         community: user.community,
         is_verified: user.is_verified,
         is_boosted: user.boost_expires_at ? new Date(user.boost_expires_at) > now : false,
         owner_is_paid: visitorIsPaid,
         should_blur_photo: shouldBlur,
+        photo_lock_reason: !shouldBlur ? null : freeViewingPaid ? 'plan_upgrade' : (user.photo_privacy === 'private' || (user.photo_privacy === 'matches' && !matchContext[user.id])) ? 'owner_privacy' : 'plan_upgrade',
         viewed_at: view.created_at,
       };
     }).filter(v => v && v.id);
@@ -260,3 +261,4 @@ router.get('/list', requireAuth, async (req, res) => {
 });
 
 export default router;
+      
