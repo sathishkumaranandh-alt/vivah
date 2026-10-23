@@ -2,7 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js';
-import { computePhotoAccess } from '../utils/privacy.js';
+import { getPhotoLockState } from './profile.js';
 import { isHttpsUrl } from '../utils/sanitize.js';
 
 dotenv.config();
@@ -48,7 +48,9 @@ router.get('/:userId', requireAuth, async (req, res) => {
     if (viewerId === userId) {
       canView = true; // Owner sees their own photos
     } else {
-      canView = await computePhotoAccess(supabaseAdmin, viewerId, userId, ownerRow, {});
+      // 🛡️ Same rules as the profile page (approval, paid lock, private / matches)
+      const state = await getPhotoLockState(viewerId, { id: userId, photo_privacy: ownerRow.photo_privacy });
+      canView = !state.locked;
     }
 
     // 3. Fetch photos
@@ -170,4 +172,4 @@ router.patch('/:photoId/primary', requireAuth, async (req, res) => {
 });
 
 export default router;
-      
+    
