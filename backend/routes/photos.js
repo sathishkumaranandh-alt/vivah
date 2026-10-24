@@ -2,8 +2,9 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js';
-import { getPhotoLockState } from './profile.js';
+import { computePhotoAccess } from '../utils/privacy.js';
 import { isHttpsUrl } from '../utils/sanitize.js';
+import { getEffectivePermissions } from '../utils/plan.js'; // 🧩 dynamic plan permissions
 
 dotenv.config();
 const router = express.Router();
@@ -17,10 +18,9 @@ const DEFAULT_MAX_PHOTOS = 3;
 
 async function getUserMaxPhotos(userId) {
   try {
-    const { data: sub } = await supabaseAdmin.from('subscriptions').select('plan, status, expires_at').eq('user_id', userId).eq('status', 'active').gte('expires_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(1).single();
-    const planName = sub?.plan || 'Free';
-    const { data: planData } = await supabaseAdmin.from('membership_plans').select('permissions').ilike('name', planName).eq('is_active', true).single();
-    return planData?.permissions?.max_photos ?? DEFAULT_MAX_PHOTOS;
+    const { perms } = await getEffectivePermissions(userId); // 🧩 admin plan (Free/paid) + custom override
+    const n = Number(perms.max_photos);
+    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MAX_PHOTOS;
   } catch (err) { return DEFAULT_MAX_PHOTOS; }
 }
 
@@ -48,9 +48,7 @@ router.get('/:userId', requireAuth, async (req, res) => {
     if (viewerId === userId) {
       canView = true; // Owner sees their own photos
     } else {
-      // 🛡️ Same rules as the profile page (approval, paid lock, private / matches)
-      const state = await getPhotoLockState(viewerId, { id: userId, photo_privacy: ownerRow.photo_privacy });
-      canView = !state.locked;
+      canView = await computePhotoAccess(supabaseAdmin, viewerId, userId, ownerRow, {});
     }
 
     // 3. Fetch photos
@@ -172,4 +170,3 @@ router.patch('/:photoId/primary', requireAuth, async (req, res) => {
 });
 
 export default router;
-    
