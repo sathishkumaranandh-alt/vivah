@@ -1,11 +1,11 @@
 import express from 'express';
-import { LOCKED_PHOTO_URL } from '../utils/privacy.js';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
 import { requireAuth } from '../utils/auth.js';
 
 dotenv.config();
+import { getEffectivePermissions, FALLBACK_FREE_PERMS, perm as planPerm } from '../utils/plan.js'; // 🧩 dynamic plan permissions
 const router = express.Router();
 
 const supabaseAdmin = createClient(
@@ -49,53 +49,20 @@ async function getPlanPermissions(planName) {
 
 async function isPaidUser(userId) {
   if (!userId) return false;
-  try {
-    const sub = await getActiveSubscription(userId);
-    if (!sub) return false;
-    const plan = (sub.plan || '').toLowerCase();
-    if (plan === 'free' || plan === '') return false;
-    if (sub.expires_at) return new Date(sub.expires_at) > new Date();
-    return false;
-  } catch { return false; }
+  return (await getEffectivePermissions(userId)).isPaid; // 🧩 shared rule
 }
 
 async function getViewerPermissions(viewerId) {
-  try {
-    if (!viewerId) return { ...DEFAULT_FREE_PERMS };
-    const { data: userData } = await supabaseAdmin.from('users').select('custom_permissions').eq('id', viewerId).single();
-    const customPerms = userData?.custom_permissions || {};
-    const sub = await getActiveSubscription(viewerId);
-    const planData = await getPlanPermissions(sub?.plan || 'Free');
-    const planPerms = planData?.permissions || {};
-    return { ...DEFAULT_FREE_PERMS, ...planPerms, ...customPerms };
-  } catch { return { ...DEFAULT_FREE_PERMS }; }
+  if (!viewerId) return { ...FALLBACK_FREE_PERMS };
+  return (await getEffectivePermissions(viewerId)).perms; // 🧩 plan perms (admin) + custom overrides
 }
 
 async function canSeeVisitors(userId) {
   try {
-    const { data: sub } = await supabaseAdmin
-      .from('subscriptions')
-      .select('plan, status, expires_at')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .gte('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    const planName = sub?.plan || 'Free';
-    const { data: planData } = await supabaseAdmin
-      .from('membership_plans')
-      .select('permissions')
-      .ilike('name', planName.trim()) // Removed is_active: true
-      .single();
-
-    const perms = planData?.permissions || {};
-    const val = perms.see_visitors;
-    return val === true || val === "true";
-  } catch (err) { 
+    return planPerm((await getEffectivePermissions(userId)).perms.see_visitors); // 🧩 admin plan + custom overrides
+  } catch (err) {
     console.error("canSeeVisitors error:", err);
-    return false; 
+    return false;
   }
 }
 
@@ -183,7 +150,7 @@ router.get('/list', requireAuth, async (req, res) => {
     const listViewerIsPaid = await isPaidUser(userId);
     const listViewerPerms = await getViewerPermissions(userId);
     const listViewerCanViewPaid = listViewerIsPaid || perm(listViewerPerms.can_view_paid_profiles);
-    const listViewerCanSeeFullPhoto = perm(listViewerPerms.see_full_photo);
+    const listViewerCanSeeFullPhoto = listViewerIsPaid && perm(listViewerPerms.see_full_photo);
 
     const paidVisitorIds = new Set();
     if (viewerIds.length > 0) {
@@ -191,7 +158,7 @@ router.get('/list', requireAuth, async (req, res) => {
         .from('subscriptions').select('user_id, plan, status, expires_at')
         .in('user_id', viewerIds).eq('status', 'active')
         .gte('expires_at', new Date().toISOString())
-        .in('plan', ['Gold', 'Platinum', 'gold', 'platinum', 'GOLD', 'PLATINUM']);
+        .not('plan', 'ilike', 'free');
       (subs || []).forEach(s => paidVisitorIds.add(s.user_id));
     }
 
@@ -230,10 +197,11 @@ router.get('/list', requireAuth, async (req, res) => {
       let shouldBlur = false;
       if (!isSelf) {
         if (hasPhotoApproved) shouldBlur = false;
+        else if (user.photo_privacy === 'private') shouldBlur = true; // 🔒 owner's "Nobody" beats any plan/permission override
         else if (freeViewingPaid) shouldBlur = true;
+        else if (listViewerCanSeeFullPhoto && visitorIsPaid) shouldBlur = false;
         else if (user.photo_privacy === 'private') shouldBlur = true;
         else if (user.photo_privacy === 'matches' && !matchContext[user.id]) shouldBlur = true;
-        else if (!listViewerCanSeeFullPhoto) shouldBlur = true; // 🛡️ plan permission applies after owner privacy
       }
 
       return {
@@ -242,13 +210,12 @@ router.get('/list', requireAuth, async (req, res) => {
         age: user.age,
         gender: user.gender,
         location: user.location,
-        photo_url: shouldBlur ? LOCKED_PHOTO_URL : user.photo_url,
+        photo_url: user.photo_url,
         community: user.community,
         is_verified: user.is_verified,
         is_boosted: user.boost_expires_at ? new Date(user.boost_expires_at) > now : false,
         owner_is_paid: visitorIsPaid,
         should_blur_photo: shouldBlur,
-        photo_lock_reason: !shouldBlur ? null : freeViewingPaid ? 'plan_upgrade' : (user.photo_privacy === 'private' || (user.photo_privacy === 'matches' && !matchContext[user.id])) ? 'owner_privacy' : 'plan_upgrade',
         viewed_at: view.created_at,
       };
     }).filter(v => v && v.id);
@@ -261,4 +228,3 @@ router.get('/list', requireAuth, async (req, res) => {
 });
 
 export default router;
-      
