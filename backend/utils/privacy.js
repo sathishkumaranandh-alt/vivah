@@ -115,7 +115,7 @@ export async function getPhotoAccess(db, viewerId, ownerId, ownerRow) {
     }
 
     // plan permission (admin-set) applies after the owner's privacy choice
-    if (!perm(perms.see_full_photo)) return { canView: false, approved: false, reason: 'plan_upgrade' };
+    if (ownerIsPaid && !perm(perms.see_full_photo)) return { canView: false, approved: false, reason: 'plan_upgrade' };
 
     return { canView: true, approved: false };
   } catch (err) {
@@ -139,5 +139,5 @@ export async function isFreeViewingPaid(db, viewerId, ownerId) {
     const perms = await viewerPermissions(db, viewerId, viewerPlan);
     return !perm(perms.can_view_paid_profiles);
   } catch { return false; }
-      }
-                                                    
+  }
+      
