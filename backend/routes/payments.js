@@ -385,8 +385,16 @@ router.post('/webhook', async (req, res) => {
       return res.json({ received: true, ignored: true });
     }
 
-    const response = await Cashfree.PGFetchOrder('2023-08-01', orderId);
-    const order = response.data;
+    let order;
+    try {
+      const response = await Cashfree.PGFetchOrder('2023-08-01', orderId);
+      order = response.data;
+    } catch (fetchErr) {
+      // Unknown order (e.g. Cashfree's dashboard "Test" button sends a dummy order) → acknowledge, do not retry
+      const code = fetchErr?.response?.status;
+      if (code === 400 || code === 404) return res.json({ received: true, ignored: true });
+      throw fetchErr;
+    }
     if (order.order_status !== 'PAID') return res.json({ received: true, ignored: true });
 
     const userId = order.customer_details?.customer_id;
