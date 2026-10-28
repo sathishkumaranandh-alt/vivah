@@ -4,65 +4,25 @@ import { sendTelegram } from "../utils/telegram.js";
 import { requireAuth } from "../utils/auth.js";
 import { validate, interestSchema } from '../utils/validators.js';
 import { publicUser } from "../utils/privacy.js"; // 🛡️ Added for data masking
-import { getEffectivePermissions, perm, isExplicit } from "../utils/plan.js"; // 🧩 dynamic plan permissions
 
 const router = express.Router();
 
-// ------------------------------------------------------------
-// 🔒 PRIVACY FIRST: blocked users can never send/receive interests
-// ------------------------------------------------------------
-async function isBlockedEitherWay(a, b) {
+// 🛡️ daily_interests from the sender's active plan (+ per-user override). Default 5 if the admin never set it.
+async function getDailyInterestLimit(userId) {
   try {
-    const { data } = await supabase
-      .from("blocked_users")
-      .select("blocker_id")
-      .or(`and(blocker_id.eq.${a},blocked_id.eq.${b}),and(blocker_id.eq.${b},blocked_id.eq.${a})`)
-      .limit(1);
-    return (data || []).length > 0;
-  } catch { return false; }
+    const { data: sub } = await supabase.from("subscriptions").select("plan")
+      .eq("user_id", userId).eq("status", "active").gte("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const planName = String(sub?.plan || "Free").replace(/[\\%_]/g, "\\$&");
+    const { data: plan } = await supabase.from("membership_plans").select("permissions").ilike("name", planName).limit(1).maybeSingle();
+    const { data: u } = await supabase.from("users").select("custom_permissions").eq("id", userId).maybeSingle();
+    let v = plan?.permissions?.daily_interests;
+    const c = u?.custom_permissions?.daily_interests;
+    if (typeof c === "number") v = c;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 5;
+  } catch { return 5; }
 }
-
-// ------------------------------------------------------------
-// 🧩 PLAN RULES (admin-configured, then enforced here):
-//    interest_to_anyone  -> false = own community only
-//    daily_interests     -> max interests per day (IST day)
-// ------------------------------------------------------------
-const IST_OFFSET_MS = 330 * 60 * 1000;
-function startOfTodayISTIso() {
-  const startIst = Math.floor((Date.now() + IST_OFFSET_MS) / 86400000) * 86400000 - IST_OFFSET_MS;
-  return new Date(startIst).toISOString();
-}
-const normCommunity = (v) => String(v || "").trim().toLowerCase();
-
-async function checkInterestPlan(senderId, receiverId) {
-  const info = await getEffectivePermissions(senderId);
-  const { perms, isPaid } = info;
-
-  if (!perm(perms.interest_to_anyone)) {
-    const { data: rows } = await supabase.from("users").select("id, community").in("id", [senderId, receiverId]);
-    const s = normCommunity(rows?.find((r) => r.id === senderId)?.community);
-    const r = normCommunity(rows?.find((r2) => r2.id === receiverId)?.community);
-    if (s && r && s !== r) {
-      return { status: 403, body: { error: "Your plan lets you send interests only to your own community. Upgrade to contact other communities.", code: "COMMUNITY_RESTRICTED", requiresUpgrade: !isPaid } };
-    }
-  }
-
-  // Paid plans created before this key existed (not explicitly set) stay unlimited
-  const limit = Number(perms.daily_interests);
-  if (Number.isFinite(limit) && (isExplicit(info, "daily_interests") || !isPaid)) {
-    const { count, error } = await supabase
-      .from("interests")
-      .select("id", { count: "exact", head: true })
-      .eq("sender_id", senderId)
-      .gte("created_at", startOfTodayISTIso());
-    if (error) { console.error("Daily interest count error:", error.message); return null; }
-    if ((count || 0) >= limit) {
-      return { status: 403, body: { error: `Daily limit reached: your plan allows ${limit} interests per day. Try again tomorrow or upgrade.`, code: "DAILY_LIMIT", limit, used: count || 0, requiresUpgrade: !isPaid } };
-    }
-  }
-  return null;
-}
-
 
 // 🛡️ Helper to validate UUID (Prevents SQL Injection)
 const isValidUUID = (uuid) => {
@@ -272,8 +232,28 @@ router.post("/send", requireAuth, validate(interestSchema), async (req, res) => 
     if (!sender_id || !receiver_id || !isValidUUID(receiver_id)) return res.status(400).json({ error: "Missing or invalid fields" });
     if (sender_id === receiver_id) return res.status(400).json({ error: "Cannot send interest to yourself" });
 
-    // 🔒 Privacy first: blocked either way -> no interest
-    if (await isBlockedEitherWay(sender_id, receiver_id)) return res.status(403).json({ error: "You cannot send an interest to this user.", code: "BLOCKED" });
+    // 🛡️ Message length cap
+    if (message !== undefined && message !== null && (typeof message !== "string" || message.length > 300)) {
+      return res.status(400).json({ error: "Message too long (max 300 characters)" });
+    }
+
+    // 🛡️ Blocked in either direction → cannot send
+    const { data: blockRows } = await supabase.from("blocked_users").select("id")
+      .in("blocker_id", [sender_id, receiver_id]).in("blocked_id", [sender_id, receiver_id]).limit(1);
+    if (blockRows && blockRows.length > 0) {
+      return res.status(403).json({ error: "You cannot send an interest to this user.", code: "BLOCKED" });
+    }
+
+    // 🛡️ Daily limit from the ADMIN plan permission (daily_interests). Negative number = unlimited.
+    const dailyLimit = await getDailyInterestLimit(sender_id);
+    if (dailyLimit >= 0) {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { count: sentToday } = await supabase.from("interests")
+        .select("id", { count: "exact", head: true }).eq("sender_id", sender_id).gte("created_at", since);
+      if ((sentToday || 0) >= dailyLimit) {
+        return res.status(429).json({ error: `Daily interest limit reached (${dailyLimit}). Upgrade your plan for more.`, code: "DAILY_LIMIT", requiresUpgrade: true });
+      }
+    }
 
     const { data: existing } = await supabase.from("interests").select("*").or(`and(sender_id.eq.${sender_id},receiver_id.eq.${receiver_id}),and(sender_id.eq.${receiver_id},receiver_id.eq.${sender_id})`).maybeSingle();
 
@@ -281,17 +261,12 @@ router.post("/send", requireAuth, validate(interestSchema), async (req, res) => 
       if (existing.status === "accepted") return res.status(400).json({ error: "Already connected" });
       if (existing.status === "pending") return res.status(400).json({ error: "Interest already sent" });
       if (existing.status === "declined" && existing.sender_id === sender_id) {
-        const planBlock = await checkInterestPlan(sender_id, receiver_id); // 🧩 then plan rules
-        if (planBlock) return res.status(planBlock.status).json(planBlock.body);
         const { data, error } = await supabase.from("interests").update({ status: "pending", created_at: new Date().toISOString(), responded_at: null, message: message || null }).eq("id", existing.id).select().single();
         if (error) throw error;
         return res.json({ message: "Interest re-sent", interest: data });
       }
       return res.status(400).json({ error: "Cannot send interest" });
     }
-
-    const planBlock = await checkInterestPlan(sender_id, receiver_id); // 🧩 then plan rules
-    if (planBlock) return res.status(planBlock.status).json(planBlock.body);
 
     const { data, error } = await supabase.from("interests").insert([{ sender_id, receiver_id, status: "pending", message: message || null }]).select().single();
     if (error) throw error;
