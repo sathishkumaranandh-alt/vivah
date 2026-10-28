@@ -94,7 +94,11 @@ app.use(
 // ============================================
 // 3. Body size limit
 // ============================================
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  // keep the exact bytes: Cashfree webhook signature is calculated over the raw body
+  verify: (req, res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ============================================
@@ -219,4 +223,4 @@ app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'production'}`);
 });
-    
+                
