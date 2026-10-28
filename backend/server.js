@@ -75,7 +75,9 @@ app.use(
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
 
-      const isVercelPreview = origin.includes('vivaha-frontend') && origin.endsWith('.vercel.app');
+      // 🛡️ No wildcard: only the exact production site (+ extra origins you list in the EXTRA_ORIGINS env var, comma separated)
+      const extra = (process.env.EXTRA_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean);
+      const isVercelPreview = extra.includes(origin);
       const isExactLocalhost = origin === 'http://localhost:3000' || origin === 'http://localhost:5173';
 
       if (ALLOWED_ORIGINS.includes(origin) || isVercelPreview || (process.env.NODE_ENV === 'development' && isExactLocalhost)) {
@@ -217,4 +219,4 @@ app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'production'}`);
 });
-        
+    
