@@ -93,4 +93,4 @@ export async function isPaidUser(userId) {
 export function isExplicit(info, key) {
   return Object.prototype.hasOwnProperty.call(info.planPerms || {}, key) ||
          Object.prototype.hasOwnProperty.call(info.custom || {}, key);
-}
+      }
