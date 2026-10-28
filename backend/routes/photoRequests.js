@@ -144,6 +144,11 @@ router.put("/respond/:id", requireAuth, async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
+  // 🛡️ Only these two answers are allowed (no 'pending'/'approved' tricks or random text)
+  if (status !== "approved" && status !== "denied") {
+    return res.status(400).json({ error: "Status must be 'approved' or 'denied'" });
+  }
+
   try {
     // 🛡️ Security: Fetch first to check who owns this request
     const { data: request, error: fetchErr } = await supabaseAdmin
@@ -252,4 +257,4 @@ router.get("/status/:requesterId/:ownerId", requireAuth, async (req, res) => {
 });
 
 export default router;
-                     
+            
