@@ -352,5 +352,101 @@ router.post('/verify-boost-payment', requireAuth, async (req, res) => {
   }
 });
 
+// ============================================
+// 5. CASHFREE WEBHOOK  (🛡️ server-to-server confirmation)
+// If the user pays and closes the browser, Cashfree still tells us and the
+// plan / boost is activated here. Nothing in the body is trusted: the
+// signature is checked, then the order is fetched again from Cashfree.
+// ============================================
+function webhookSignatureOk(req) {
+  try {
+    const secret = process.env.CASHFREE_SECRET_KEY;
+    const ts = req.headers['x-webhook-timestamp'];
+    const sig = req.headers['x-webhook-signature'];
+    if (!secret || !ts || !sig || !req.rawBody) return false;
+    const expected = crypto.createHmac('sha256', secret).update(String(ts) + req.rawBody.toString('utf8')).digest('base64');
+    const a = Buffer.from(expected);
+    const b = Buffer.from(String(sig));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch { return false; }
+}
+
+router.post('/webhook', async (req, res) => {
+  if (!webhookSignatureOk(req)) {
+    console.warn('🚫 Cashfree webhook: bad signature');
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  try {
+    const orderId = req.body?.data?.order?.order_id;
+    const type = req.body?.type;
+    // Only successful-payment events matter; acknowledge everything else
+    if (type !== 'PAYMENT_SUCCESS_WEBHOOK' || typeof orderId !== 'string' || orderId.length > 64) {
+      return res.json({ received: true, ignored: true });
+    }
+
+    const response = await Cashfree.PGFetchOrder('2023-08-01', orderId);
+    const order = response.data;
+    if (order.order_status !== 'PAID') return res.json({ received: true, ignored: true });
+
+    const userId = order.customer_details?.customer_id;
+    if (!userId) return res.json({ received: true, ignored: true });
+    const now = new Date();
+
+    // ---- Plan order ----
+    if (isSafeOrderId(orderId, 'order')) {
+      const { data: used } = await supabaseAdmin.from('subscriptions').select('id').eq('payment_id', orderId).limit(1).maybeSingle();
+      if (used) return res.json({ received: true, already: true });
+
+      const m = /^Upgrade to (.+) plan$/.exec(order.order_note || '');
+      const planData = m ? await findActivePlan(m[1]) : null;
+      if (!planData) { console.warn('Webhook: plan not found for', orderId); return res.json({ received: true, ignored: true }); }
+      if (Number(order.order_amount) + AMOUNT_TOLERANCE < Number(planData.price)) {
+        console.warn('🚫 Webhook: amount mismatch', orderId);
+        return res.json({ received: true, ignored: true });
+      }
+
+      const expiresAt = new Date(now.getTime() + (planData.duration_days || 30) * 24 * 60 * 60 * 1000);
+      const { data: sub, error } = await supabaseAdmin.from('subscriptions').insert([{
+        user_id: userId, plan: planData.name.toLowerCase(), status: 'active', amount: planData.price,
+        started_at: now.toISOString(), expires_at: expiresAt.toISOString(), payment_id: orderId,
+      }]).select().single();
+      if (error) {
+        if (error.code === '23505') return res.json({ received: true, already: true });
+        throw error;
+      }
+      await supabaseAdmin.from('subscriptions')
+        .update({ status: 'cancelled', updated_at: now.toISOString() })
+        .eq('user_id', userId).eq('status', 'active').neq('id', sub.id);
+      return res.json({ received: true, activated: 'plan' });
+    }
+
+    // ---- Boost order ----
+    if (isSafeOrderId(orderId, 'boost')) {
+      const { data: used } = await supabaseAdmin.from('boost_history').select('id').eq('payment_id', orderId).limit(1).maybeSingle();
+      if (used) return res.json({ received: true, already: true });
+      if (Number(order.order_amount) + AMOUNT_TOLERANCE < BOOST_PRICE) {
+        console.warn('🚫 Webhook: boost amount mismatch', orderId);
+        return res.json({ received: true, ignored: true });
+      }
+      const newExpiry = new Date(now.getTime() + BOOST_DURATION_DAYS * 24 * 60 * 60 * 1000);
+      const { error: logErr } = await supabaseAdmin.from('boost_history').insert({
+        user_id: userId, expires_at: newExpiry.toISOString(), amount: order.order_amount, payment_id: orderId,
+      });
+      if (logErr) {
+        if (logErr.code === '23505') return res.json({ received: true, already: true });
+        console.warn('Webhook: boost history failed', logErr);
+      }
+      await supabaseAdmin.from('users').update({ boost_expires_at: newExpiry.toISOString() }).eq('id', userId);
+      return res.json({ received: true, activated: 'boost' });
+    }
+
+    res.json({ received: true, ignored: true });
+  } catch (err) {
+    console.error('Cashfree webhook error:', err?.response?.data || err.message);
+    // 500 → Cashfree retries later
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
 export default router;
-  
