@@ -9,6 +9,44 @@ const supabaseAdmin = createClient(
 );
 
 // ============================================
+// 🛡️ SUSPENSION CHECK (cached)
+// requireAuth runs on every request (chat polling, heartbeats...), so the
+// "is this user suspended?" answer is cached per user for 30 seconds.
+// → a suspension takes effect within ~30s without hammering the database.
+// ============================================
+const STATUS_TTL_MS = 30 * 1000;
+const STATUS_MAX_ENTRIES = 5000;
+const statusCache = new Map(); // userId -> { suspended: boolean, at: number }
+
+// Optional: call this right after suspend/unsuspend for an instant effect
+export function clearUserStatusCache(userId) {
+  statusCache.delete(userId);
+}
+
+async function isSuspendedUser(userId) {
+  const hit = statusCache.get(userId);
+  if (hit && Date.now() - hit.at < STATUS_TTL_MS) return hit.suspended;
+
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('is_suspended')
+    .eq('id', userId)
+    .maybeSingle(); // no row yet (brand-new signup) → not suspended
+
+  if (error) throw error; // fail closed: the catch in requireAuth answers 500
+
+  const suspended = data?.is_suspended === true;
+  if (suspended) console.warn('🚫 Suspended user blocked:', userId);
+
+  if (statusCache.size >= STATUS_MAX_ENTRIES) {
+    statusCache.delete(statusCache.keys().next().value); // drop the oldest entry
+  }
+  statusCache.delete(userId);
+  statusCache.set(userId, { suspended, at: Date.now() });
+  return suspended;
+}
+
+// ============================================
 // 🔒 AUTH MIDDLEWARE — Verify Supabase JWT
 // ============================================
 export async function requireAuth(req, res, next) {
@@ -25,6 +63,14 @@ export async function requireAuth(req, res, next) {
 
     if (error || !user) {
       return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    // 🛡️ Suspended accounts cannot use ANY api (admins included)
+    if (await isSuspendedUser(user.id)) {
+      return res.status(403).json({
+        error: 'Your account has been suspended. Please contact support.',
+        suspended: true,
+      });
     }
 
     // இது தான் மத்த எல்லா Route-க்கும் யார் Request அனுப்புறாங்கனு சொல்லும்
