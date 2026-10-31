@@ -1,3 +1,4 @@
+import { Sentry } from './instrument.js'; // must stay the first import
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -214,6 +215,8 @@ app.get('/', (req, res) => {
 // ============================================
 // Error Handler
 // ============================================
+if (Sentry) Sentry.setupExpressErrorHandler(app);
+
 app.use((err, req, res, next) => {
   console.error('❌ Server error:', {
     message: err.message,
@@ -252,4 +255,4 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-  
+        
