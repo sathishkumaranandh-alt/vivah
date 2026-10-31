@@ -32,6 +32,42 @@ router.get('/', async (req, res) => {
 });
 
 // ============================================
+// 💌 MEMBER — submit a story (saved as NOT approved; admin reviews first)
+// ============================================
+const submitLog = new Map(); // userId -> [timestamps] (max 3 per 24h)
+router.post('/submit', requireAuth, async (req, res) => {
+  try {
+    const uid = req.userId;
+    const now = Date.now();
+    const recent = (submitLog.get(uid) || []).filter((t) => now - t < 24 * 60 * 60 * 1000);
+    if (recent.length >= 3) {
+      return res.status(429).json({ error: 'You have already submitted a few stories today. Please try again tomorrow.' });
+    }
+
+    const clean = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+    const couple_names = clean(req.body.couple_names, 120);
+    const story = clean(req.body.story, 1500);
+    const location = clean(req.body.location, 80);
+    if (!couple_names || story.length < 20) {
+      return res.status(400).json({ error: 'Please enter both names and a story of at least 20 characters.' });
+    }
+
+    const payload = { couple_names, story, is_approved: false };
+    if (location) payload.location = location;
+
+    const { error } = await supabaseAdmin.from('success_stories').insert([payload]);
+    if (error) throw error;
+
+    recent.push(now);
+    submitLog.set(uid, recent);
+    res.status(201).json({ message: 'Story submitted for review' });
+  } catch (err) {
+    console.error('Submit story error:', err);
+    res.status(500).json({ error: 'Could not submit your story. Please try again.' });
+  }
+});
+
+// ============================================
 // 🔒 ADMIN — GET all stories (approved + not)
 // ============================================
 router.get('/admin/all', requireAuth, requireAdmin, async (req, res) => {
