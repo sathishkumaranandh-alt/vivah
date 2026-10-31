@@ -42,6 +42,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'); // API is called from the frontend domain
   res.setHeader('Cache-Control', 'no-store'); // API responses contain private data
@@ -191,6 +192,10 @@ app.use('/', auditRoutes);
 // ============================================
 // Health check
 // ============================================
+app.get('/health', (req, res) => {
+  res.json({ ok: true, uptime: Math.round(process.uptime()) });
+});
+
 app.get('/', (req, res) => {
   res.json({
     status: 'Vivaha backend running',
@@ -219,8 +224,24 @@ app.use((err, req, res, next) => {
 // Start server
 // ============================================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'production'}`);
 });
-                
+
+// 🛡️ Crash safety + graceful shutdown (Render sends SIGTERM on every deploy)
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+const shutdown = (signal) => {
+  console.log(`${signal} received, closing server...`);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 10000).unref();
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+    
