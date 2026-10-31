@@ -2,6 +2,7 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
+import { notifyAdmins, inAppNotify } from '../utils/notify.js';
 
 dotenv.config();
 const router = express.Router();
@@ -33,8 +34,11 @@ router.post('/signup', async (req, res) => {
   if (!data.email || !emailRegex.test(data.email)) {
     return res.status(400).json({ error: "Valid email address is required" });
   }
-  if (!data.password || data.password.length < 6 || data.password.length > 72) {
-    return res.status(400).json({ error: "Password must be between 6 and 72 characters" });
+  if (!data.password || data.password.length < 8 || data.password.length > 72) {
+    return res.status(400).json({ error: "Password must be between 8 and 72 characters" });
+  }
+  if (!/[A-Za-z]/.test(data.password) || !/[0-9]/.test(data.password)) {
+    return res.status(400).json({ error: "Password must contain at least one letter and one number" });
   }
   if (!data.name || !data.gender) {
     return res.status(400).json({ error: "Name and Gender are required" });
@@ -105,6 +109,15 @@ router.post('/signup', async (req, res) => {
       await supabaseAdmin.auth.admin.deleteUser(userId).catch(console.error);
       throw new Error("Database error");
     }
+
+    // 🎉 Welcome (in-app) + admin alert — best effort, never blocks signup
+    inAppNotify(userId, {
+      type: 'welcome',
+      title: 'Welcome to Vivaha 💍',
+      body: 'Complete your profile and add a photo to get more matches. Connect Telegram in Settings for instant alerts.',
+      link: '/profile',
+    });
+    notifyAdmins(`🆕 <b>New user</b>\n${escapeHtml(data.name)} · ${escapeHtml(data.gender)} · ${escapeHtml(data.community || '-')}`);
 
     // ==========================================
     // 3. TELEGRAM MATCH NOTIFICATION
@@ -197,3 +210,4 @@ A new profile matching your preferences just registered.
 });
 
 export default router;
+  
