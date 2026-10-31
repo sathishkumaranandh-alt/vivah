@@ -7,6 +7,7 @@ import paymentRoutes from './routes/payments.js';
 
 // Route Imports
 import authRoutes from './routes/auth.js';
+import cronRoutes from './routes/cron.js';
 import profileRoutes from './routes/profile.js';
 import messageRoutes from './routes/messages.js';
 import subscriptionRoutes from './routes/subscriptions.js';
@@ -162,6 +163,7 @@ app.use(generalLimiter);
 // ============================================
 // 5. Routes
 // ============================================
+app.use('/cron', cronRoutes);
 app.use('/auth', authRoutes);
 app.use('/profile', profileRoutes);
 app.use('/messages', messageRoutes);
@@ -244,4 +246,3 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-    
