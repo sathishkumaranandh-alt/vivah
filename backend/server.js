@@ -139,6 +139,11 @@ const pollingLimiter = rateLimit({
 });
 
 // Apply limiters
+// ⏰ Cron endpoints: protected by CRON_SECRET, so they bypass the shared per-IP limiter
+// (many users share the same proxy IP, which caused false 429s). Wrong-secret guessing is still capped.
+const cronLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false });
+app.use('/cron', cronLimiter, cronRoutes);
+
 app.use('/messages/heartbeat', heartbeatLimiter);
 app.use('/messages/chat', pollingLimiter);
 app.use('/messages/typing-status', pollingLimiter);
@@ -163,7 +168,6 @@ app.use(generalLimiter);
 // ============================================
 // 5. Routes
 // ============================================
-app.use('/cron', cronRoutes);
 app.use('/auth', authRoutes);
 app.use('/profile', profileRoutes);
 app.use('/messages', messageRoutes);
@@ -246,3 +250,4 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
+      
