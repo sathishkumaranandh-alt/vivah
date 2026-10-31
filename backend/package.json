@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@sentry/node": "^8.55.0",
     "@supabase/supabase-js": "^2.39.0",
     "axios": "^1.6.0",
     "cashfree-pg": "^4.3.5",
