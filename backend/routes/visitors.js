@@ -100,7 +100,6 @@ async function canSeeVisitors(userId) {
 }
 
 router.post('/log', requireAuth, async (req, res) => {
-  console.log("--- STARTING VISITOR NOTIFICATION ---");
   const viewerId = req.userId;
   const { viewedId } = req.body;
 
@@ -111,7 +110,6 @@ router.post('/log', requireAuth, async (req, res) => {
     return res.json({ message: "Self view ignored" });
   }
   if (!viewerId) {
-    console.log("No viewerId found. JWT missing.");
     return res.status(401).json({ error: "Unauthorized" });
   }
 
@@ -120,10 +118,8 @@ router.post('/log', requireAuth, async (req, res) => {
       viewer_id: viewerId,
       viewed_id: viewedId
     });
-    console.log("Profile view logged for viewedId:", viewedId, "| by viewerId:", viewerId);
 
     const ownerCanSee = await canSeeVisitors(viewedId);
-    console.log("Owner can see visitors?", ownerCanSee);
 
     if (!ownerCanSee) {
       return res.json({ success: true, notified: false, reason: "Not a paid member" });
@@ -138,8 +134,7 @@ router.post('/log', requireAuth, async (req, res) => {
         owner.telegram_chat_id,
         `👀 <b>Profile View</b>\n\n<b>${viewer?.name || "Someone"}</b> just viewed your profile.\n\nTap to see who → https://vivaha-frontend.vercel.app/visitors`
       );
-      console.log("TELEGRAM API RESULT:", tgResult);
-      return res.json({ success: true, notified: true, telegram_response: tgResult });
+      return res.json({ success: true, notified: !!tgResult });
     }
     res.json({ success: true, notified: false, reason: "Telegram not linked" });
 
@@ -261,3 +256,4 @@ router.get('/list', requireAuth, async (req, res) => {
 });
 
 export default router;
+      
