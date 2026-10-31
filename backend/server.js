@@ -161,6 +161,8 @@ app.use('/reports', actionLimiter);
 app.use('/boost', actionLimiter);
 app.use('/payments', actionLimiter);
 app.use('/telegram/generate-token', actionLimiter);
+app.use('/profile/export', actionLimiter);
+app.use('/success-stories/submit', actionLimiter);
 
 app.use('/auth', authLimiter);
 app.use(generalLimiter); 
@@ -250,4 +252,4 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-      
+  
