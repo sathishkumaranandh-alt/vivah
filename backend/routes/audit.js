@@ -102,7 +102,9 @@ router.get("/settings", async (req, res) => {
     if (error) throw error;
 
     const settings = {};
-    (data || []).forEach((s) => { settings[s.key] = s.value; });
+    // 🛡️ Public endpoint: never expose secret-looking keys
+    const SECRET_KEY = /secret|token|password|passwd|api[_-]?key|private|webhook|service|salt|credential/i;
+    (data || []).forEach((s) => { if (!SECRET_KEY.test(s.key)) settings[s.key] = s.value; });
     res.json({ settings });
   } catch (err) {
     console.error("Get settings error:", err);
@@ -140,3 +142,4 @@ router.put("/settings", requireAdmin, async (req, res) => {
 });
 
 export default router;
+  
