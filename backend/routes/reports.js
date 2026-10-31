@@ -1,5 +1,6 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
+import { notifyAdmins, escapeHtml } from "../utils/notify.js";
 import { requireAuth, requireAdmin } from "../utils/auth.js"; // 🛡️ Added Security
 
 const router = express.Router();
@@ -36,6 +37,8 @@ router.post("/create", requireAuth, async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    notifyAdmins(`🚩 <b>New report</b>\nReason: ${escapeHtml(reason)}\nOpen admin panel to review.`);
 
     res.status(201).json({ message: "Report submitted", report: data });
   } catch (err) {
@@ -152,3 +155,4 @@ router.patch("/:reportId/dismiss", requireAuth, requireAdmin, async (req, res) =
 });
 
 export default router;
+      
