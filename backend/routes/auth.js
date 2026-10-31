@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
 import { notifyAdmins, inAppNotify } from '../utils/notify.js';
+import { verifyTurnstile } from '../utils/turnstile.js';
 
 dotenv.config();
 const router = express.Router();
@@ -28,6 +29,11 @@ const escapeHtml = (str) => {
 // POST /auth/signup - Handles full registration
 router.post('/signup', async (req, res) => {
   const data = req.body;
+
+  // 🤖 Bot protection (active only when TURNSTILE_SECRET_KEY is set in env)
+  if (!(await verifyTurnstile(data.captchaToken, req.ip))) {
+    return res.status(400).json({ error: "Security check failed. Please refresh and try again." });
+  }
 
   // 🛡️ VALIDATION FIX
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
