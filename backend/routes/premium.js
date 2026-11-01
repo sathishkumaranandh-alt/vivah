@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js'; // 🛡️ Added
 import { publicUser } from '../utils/privacy.js'; // 🛡️ Added
+import { getEffectivePermissions, perm as planPerm, isExplicit } from '../utils/plan.js'; // 🧩 admin-plan permissions
 import { safeFilterText } from '../utils/sanitize.js';
 
 dotenv.config();
@@ -67,8 +68,10 @@ router.get('/advanced-search', requireAuth, async (req, res) => {
   } = req.query;
 
   try {
-    const plan = await getUserPlan(viewerId);
-    const isPremium = plan === 'gold' || plan === 'platinum';
+    const viewerInfo = await getEffectivePermissions(viewerId);
+    const plan = String(viewerInfo.plan || 'free').toLowerCase();
+    // 🧩 admin plan permission "advanced_search" (no hard-coded plan names)
+    const isPremium = planPerm(viewerInfo.perms.advanced_search) || (viewerInfo.isPaid && !isExplicit(viewerInfo, 'advanced_search'));
 
     const usingPremiumFilters =
       education || income || marital_status || food_pref ||
@@ -181,14 +184,14 @@ router.get('/recommendations/:userId', requireAuth, async (req, res) => {
   }
 
   try {
-    const plan = await getUserPlan(userId);
-
-    const limits = {
-      free: { count: 5, exclusive: false },
-      gold: { count: 20, exclusive: false },
-      platinum: { count: 100, exclusive: true },
-    };
-    const { count, exclusive } = limits[plan] || limits.free;
+    // 🧩 daily_recommendations from the ADMIN plan (+ per-user override)
+    const recInfo = await getEffectivePermissions(userId);
+    const plan = String(recInfo.plan || 'free').toLowerCase();
+    let count = Number(recInfo.perms.daily_recommendations);
+    if (!Number.isFinite(count) || count < 0) count = 5;
+    // paid plans created before this key existed keep their old limits until the admin sets it
+    if (recInfo.isPaid && !isExplicit(recInfo, 'daily_recommendations')) count = ({ gold: 20, platinum: 100 })[plan] || 20;
+    const exclusive = plan === 'platinum';
 
     const { data: me } = await supabaseAdmin
       .from('users').select('*').eq('id', userId).single();
@@ -324,4 +327,5 @@ router.get('/premium-matches/:userId', requireAuth, async (req, res) => {
 });
 
 export default router;
+
       
