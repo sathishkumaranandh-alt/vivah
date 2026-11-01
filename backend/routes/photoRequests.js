@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { sendTelegram } from "../utils/telegram.js";
 import { requireAuth } from "../utils/auth.js"; // 🛡️ Added Security
 import { getPhotoAccess } from "../utils/privacy.js";
+import { getEffectivePermissions, perm as planPerm, isExplicit } from "../utils/plan.js"; // 🧩 admin-plan permissions
 
 dotenv.config();
 const router = express.Router();
@@ -41,6 +42,12 @@ router.post("/request", requireAuth, async (req, res) => {
     if (access.canView) return res.json({ already: true, status: "visible" });
     if (access.reason === "plan_upgrade") {
       return res.status(403).json({ error: "Upgrade your plan to view this photo", requiresUpgrade: true });
+    }
+
+    // 🧩 request_photo (admin plan): enforced only if the admin explicitly turned it OFF for this plan
+    const reqInfo = await getEffectivePermissions(requester_id);
+    if (isExplicit(reqInfo, "request_photo") && !planPerm(reqInfo.perms.request_photo)) {
+      return res.status(403).json({ error: "Your plan does not include photo requests. Upgrade to request photos.", requiresUpgrade: true });
     }
 
     const { data, error } = await supabaseAdmin
@@ -257,4 +264,5 @@ router.get("/status/:requesterId/:ownerId", requireAuth, async (req, res) => {
 });
 
 export default router;
-            
+
+  
