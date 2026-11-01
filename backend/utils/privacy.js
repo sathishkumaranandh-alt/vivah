@@ -8,6 +8,13 @@ const LOCKED_SVG =
   '<rect width="400" height="500" fill="#e9d5dc"/>' +
   '<circle cx="200" cy="190" r="70" fill="#c9a6b3"/>' +
   '<path d="M60 500c0-110 62-170 140-170s140 60 140 170z" fill="#c9a6b3"/></svg>';
+import { getEffectivePermissions } from './plan.js'; // 🧩 admin-plan permissions
+
+// 🔒 What counts as a "match" for the owner's "Matches only" lock. Default = ACCEPTED interests only.
+// (A pending interest must NOT unlock a photo/contact the owner restricted to matches.)
+// Want pending to count too?  change to ['pending', 'accepted'].
+export const MATCH_STATUSES = ['accepted'];
+
 export const LOCKED_PHOTO_URL = 'data:image/svg+xml;utf8,' + encodeURIComponent(LOCKED_SVG);
 
 export function publicUser(user, keepContact = false) {
@@ -90,15 +97,12 @@ export async function getPhotoAccess(db, viewerId, ownerId, ownerRow) {
       .limit(1);
     if (approvedRows && approvedRows.length > 0) return { canView: true, approved: true };
 
-    const [ownerPlan, viewerPlan] = await Promise.all([
-      activePlanName(db, ownerId),
-      activePlanName(db, viewerId),
-    ]);
+    const ownerPlan = await activePlanName(db, ownerId);
     const ownerIsPaid = isPaidPlan(ownerPlan);
-    const viewerIsPaid = isPaidPlan(viewerPlan);
-    const perms = await viewerPermissions(db, viewerId, viewerPlan);
+    // 🧩 same permissions function the whole backend uses (admin plan + per-user override)
+    const perms = (await getEffectivePermissions(viewerId)).perms;
 
-    const canViewPaidProfiles = viewerIsPaid || perm(perms.can_view_paid_profiles);
+    const canViewPaidProfiles = perm(perms.can_view_paid_profiles);
     if (ownerIsPaid && !canViewPaidProfiles) return { canView: false, approved: false, reason: 'plan_upgrade' };
 
     const privacy = ownerRow?.photo_privacy || 'public';
@@ -109,7 +113,7 @@ export async function getPhotoAccess(db, viewerId, ownerId, ownerRow) {
         .from('interests')
         .select('id')
         .or(`and(sender_id.eq.${viewerId},receiver_id.eq.${ownerId}),and(sender_id.eq.${ownerId},receiver_id.eq.${viewerId})`)
-        .in('status', ['pending', 'accepted'])
+        .in('status', MATCH_STATUSES)
         .limit(1);
       if (!rows || rows.length === 0) return { canView: false, approved: false, reason: 'owner_privacy' };
     }
@@ -140,4 +144,5 @@ export async function isFreeViewingPaid(db, viewerId, ownerId) {
     return !perm(perms.can_view_paid_profiles);
   } catch { return false; }
   }
-      
+
+    
