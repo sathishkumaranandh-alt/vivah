@@ -8,7 +8,7 @@ const LOCKED_SVG =
   '<rect width="400" height="500" fill="#e9d5dc"/>' +
   '<circle cx="200" cy="190" r="70" fill="#c9a6b3"/>' +
   '<path d="M60 500c0-110 62-170 140-170s140 60 140 170z" fill="#c9a6b3"/></svg>';
-import { getEffectivePermissions } from './plan.js'; // 🧩 admin-plan permissions
+import { getEffectivePermissions, planLocks } from './plan.js'; // 🧩 admin-plan permissions
 
 // 🔒 What counts as a "match" for the owner's "Matches only" lock. Default = ACCEPTED interests only.
 // (A pending interest must NOT unlock a photo/contact the owner restricted to matches.)
@@ -119,7 +119,7 @@ export async function getPhotoAccess(db, viewerId, ownerId, ownerRow) {
     }
 
     // plan permission (admin-set) applies after the owner's privacy choice
-    if (ownerIsPaid && !perm(perms.see_full_photo)) return { canView: false, approved: false, reason: 'plan_upgrade' };
+    if (planLocks(ownerIsPaid, perms, 'see_full_photo')) return { canView: false, approved: false, reason: 'plan_upgrade' };
 
     return { canView: true, approved: false };
   } catch (err) {
@@ -145,4 +145,4 @@ export async function isFreeViewingPaid(db, viewerId, ownerId) {
   } catch { return false; }
   }
 
-    
+      
