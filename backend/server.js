@@ -70,8 +70,6 @@ app.use((req, res, next) => {
 // ============================================
 const ALLOWED_ORIGINS = [
   'https://vivaha-frontend.vercel.app',
-  'http://localhost:3000',
-  'http://localhost:5173',
 ];
 
 app.use(
@@ -87,8 +85,8 @@ app.use(
       if (ALLOWED_ORIGINS.includes(origin) || isVercelPreview || (process.env.NODE_ENV === 'development' && isExactLocalhost)) {
         callback(null, true);
       } else {
-        console.warn('🚫 CORS blocked:', origin);
-        callback(new Error('Not allowed by CORS'));
+        // Refuse quietly: the browser blocks the call; no 500 error / log spam
+        callback(null, false);
       }
     },
     credentials: true,
@@ -262,3 +260,4 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
+        
