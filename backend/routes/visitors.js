@@ -1,6 +1,6 @@
 import express from 'express';
 import { LOCKED_PHOTO_URL, MATCH_STATUSES } from '../utils/privacy.js';
-import { getEffectivePermissions, perm as planPerm, getActiveSubscription as planActiveSubscription } from '../utils/plan.js'; // 🧩 admin-plan permissions
+import { getEffectivePermissions, planLocks, perm as planPerm, getActiveSubscription as planActiveSubscription } from '../utils/plan.js'; // 🧩 admin-plan permissions
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
@@ -183,7 +183,7 @@ router.get('/list', requireAuth, async (req, res) => {
         else if (freeViewingPaid) shouldBlur = true;
         else if (user.photo_privacy === 'private') shouldBlur = true;
         else if (user.photo_privacy === 'matches' && !matchContext[user.id]) shouldBlur = true;
-        else if (visitorIsPaid && !listViewerCanSeeFullPhoto) shouldBlur = true; // 🛡️ plan permission applies after owner privacy
+        else if (planLocks(visitorIsPaid, listViewerPerms, 'see_full_photo')) shouldBlur = true; // 🛡️ plan permission applies after owner privacy
       }
 
       return {
@@ -212,4 +212,4 @@ router.get('/list', requireAuth, async (req, res) => {
 
 export default router;
 
-    
+  
