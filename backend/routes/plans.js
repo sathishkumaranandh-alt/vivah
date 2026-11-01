@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { requireAuth, requireAdmin } from '../utils/auth.js'; // 🛡️ Added requireAuth
 
 dotenv.config();
+import { getEffectivePermissions } from '../utils/plan.js'; // 🧩 same function the backend enforces with
 const router = express.Router();
 
 const supabaseAdmin = createClient(
@@ -56,29 +57,10 @@ router.get('/user-plan/:userId', requireAuth, async (req, res) => {
   }
 
   try {
-    const { data: sub } = await supabaseAdmin
-      .from('subscriptions')
-      .select('plan, status, expires_at')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .gte('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    const planName = sub?.plan || 'Free';
-
-    const { data: planData } = await supabaseAdmin
-      .from('membership_plans')
-      .select('*')
-      .ilike('name', planName)
-      .single();
-
-    res.json({
-      plan: planName,
-      permissions: planData?.permissions || {},
-      subscription: sub || null,
-    });
+    // 🧩 One source of truth: the exact permissions the server enforces
+    // (admin plan row + per-user override; expired plans count as Free; duplicate rows can't break it)
+    const info = await getEffectivePermissions(userId);
+    res.json({ plan: info.plan, permissions: info.perms, subscription: info.sub || null });
   } catch (err) {
     res.json({ plan: 'Free', permissions: {}, subscription: null });
   }
@@ -178,3 +160,4 @@ router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
 });
 
 export default router;
+    
