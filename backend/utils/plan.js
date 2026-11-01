@@ -117,5 +117,43 @@ export function isExplicit(info, key) {
 export function planLocks(ownerIsPaid, perms, key) {
   if (perm((perms || {})[key])) return false;
   return !!ownerIsPaid || !!(perms && perms.__explicit && perms.__explicit.has(key));
-      }
+}
+
+// 🧩 Human-readable feature list built LIVE from the admin's plan permissions,
+// so what users see on the Plans / My Subscription pages always matches what the server enforces.
+const FEATURE_LABELS = [
+  ["daily_interests", (n) => `${n} interests per day`, "number"],
+  ["daily_recommendations", (n) => `${n} recommendations per day`, "number"],
+  ["max_photos", (n) => `Upload up to ${n} photos`, "number"],
+  ["advanced_search", "Advanced search filters"],
+  ["see_visitors", "See who viewed your profile"],
+  ["unlimited_chat", "Unlimited chat"],
+  ["profile_boost", "Profile boost included"],
+  ["contact_access", "View contact details"],
+  ["priority_support", "Priority support"],
+  ["see_dob", "See date of birth"],
+  ["see_horoscope", "See horoscope details"],
+  ["see_income", "See income details"],
+  ["interest_to_anyone", "Send interest to any community"],
+  ["see_full_photo", "See full photos (no blur)"],
+  ["request_photo", "Request to view photos"],
+  ["can_view_paid_profiles", "View paid member profiles"],
+];
+export function planFeatureList(permissions = {}) {
+  const p = permissions || {};
+  const out = [];
+  FEATURE_LABELS.forEach(([key, label, kind]) => {
+    if (kind === "number") {
+      const n = Number(p[key]);
+      if (Number.isFinite(n) && n > 0) out.push(label(n));
+    } else if (perm(p[key])) out.push(label);
+  });
+  return out;
+}
+
+// Look up a plan row by name (case-insensitive) and return its live feature list
+export async function getPlanFeatures(planName) {
+  const row = await getPlanRow(planName);
+  return row ? planFeatureList(row.permissions) : [];
+        }
       
