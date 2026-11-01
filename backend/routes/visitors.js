@@ -1,5 +1,6 @@
 import express from 'express';
-import { LOCKED_PHOTO_URL } from '../utils/privacy.js';
+import { LOCKED_PHOTO_URL, MATCH_STATUSES } from '../utils/privacy.js';
+import { getEffectivePermissions, perm as planPerm, getActiveSubscription as planActiveSubscription } from '../utils/plan.js'; // 🧩 admin-plan permissions
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
@@ -27,75 +28,29 @@ function perm(v) {
 }
 
 async function getActiveSubscription(userId) {
-  if (!userId) return null;
-  try {
-    const { data } = await supabaseAdmin.from('subscriptions')
-      .select('plan, status, started_at, expires_at, created_at')
-      .eq('user_id', userId).eq('status', 'active')
-      .order('created_at', { ascending: false }).limit(1).single();
-    return data || null;
-  } catch { return null; }
+  return planActiveSubscription(userId); // 🧩 active AND not expired
 }
 
 async function getPlanPermissions(planName) {
-  if (!planName) return null;
-  try {
-    const { data } = await supabaseAdmin.from('membership_plans')
-      .select('permissions, name, duration_days')
-      .ilike('name', planName.trim()).eq('is_active', true).single();
-    return data || null;
-  } catch { return null; }
+  return null; // 🧩 compatibility stub - lookups go through utils/plan.js
 }
 
 async function isPaidUser(userId) {
   if (!userId) return false;
-  try {
-    const sub = await getActiveSubscription(userId);
-    if (!sub) return false;
-    const plan = (sub.plan || '').toLowerCase();
-    if (plan === 'free' || plan === '') return false;
-    if (sub.expires_at) return new Date(sub.expires_at) > new Date();
-    return false;
-  } catch { return false; }
+  return (await getEffectivePermissions(userId)).isPaid; // 🧩 any active non-free plan
 }
 
 async function getViewerPermissions(viewerId) {
-  try {
-    if (!viewerId) return { ...DEFAULT_FREE_PERMS };
-    const { data: userData } = await supabaseAdmin.from('users').select('custom_permissions').eq('id', viewerId).single();
-    const customPerms = userData?.custom_permissions || {};
-    const sub = await getActiveSubscription(viewerId);
-    const planData = await getPlanPermissions(sub?.plan || 'Free');
-    const planPerms = planData?.permissions || {};
-    return { ...DEFAULT_FREE_PERMS, ...planPerms, ...customPerms };
-  } catch { return { ...DEFAULT_FREE_PERMS }; }
+  if (!viewerId) return { ...DEFAULT_FREE_PERMS };
+  return (await getEffectivePermissions(viewerId)).perms; // 🧩 admin plan + per-user override
 }
 
 async function canSeeVisitors(userId) {
   try {
-    const { data: sub } = await supabaseAdmin
-      .from('subscriptions')
-      .select('plan, status, expires_at')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .gte('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    const planName = sub?.plan || 'Free';
-    const { data: planData } = await supabaseAdmin
-      .from('membership_plans')
-      .select('permissions')
-      .ilike('name', planName.trim()) // Removed is_active: true
-      .single();
-
-    const perms = planData?.permissions || {};
-    const val = perms.see_visitors;
-    return val === true || val === "true";
-  } catch (err) { 
+    return planPerm((await getEffectivePermissions(userId)).perms.see_visitors); // 🧩 admin plan + per-user override
+  } catch (err) {
     console.error("canSeeVisitors error:", err);
-    return false; 
+    return false;
   }
 }
 
@@ -177,7 +132,7 @@ router.get('/list', requireAuth, async (req, res) => {
 
     const listViewerIsPaid = await isPaidUser(userId);
     const listViewerPerms = await getViewerPermissions(userId);
-    const listViewerCanViewPaid = listViewerIsPaid || perm(listViewerPerms.can_view_paid_profiles);
+    const listViewerCanViewPaid = perm(listViewerPerms.can_view_paid_profiles);
     const listViewerCanSeeFullPhoto = perm(listViewerPerms.see_full_photo);
 
     const paidVisitorIds = new Set();
@@ -186,7 +141,7 @@ router.get('/list', requireAuth, async (req, res) => {
         .from('subscriptions').select('user_id, plan, status, expires_at')
         .in('user_id', viewerIds).eq('status', 'active')
         .gte('expires_at', new Date().toISOString())
-        .in('plan', ['Gold', 'Platinum', 'gold', 'platinum', 'GOLD', 'PLATINUM']);
+        .not('plan', 'ilike', 'free');
       (subs || []).forEach(s => paidVisitorIds.add(s.user_id));
     }
 
@@ -203,7 +158,7 @@ router.get('/list', requireAuth, async (req, res) => {
       const { data: interests } = await supabaseAdmin
         .from('interests').select('sender_id, receiver_id, status')
         .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-        .in('status', ['pending', 'accepted']);
+        .in('status', MATCH_STATUSES);
 
       (interests || []).forEach(i => {
         const otherId = i.sender_id === userId ? i.receiver_id : i.sender_id;
@@ -256,4 +211,5 @@ router.get('/list', requireAuth, async (req, res) => {
 });
 
 export default router;
-      
+
+    
