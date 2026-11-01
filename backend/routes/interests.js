@@ -4,6 +4,7 @@ import { sendTelegram } from "../utils/telegram.js";
 import { requireAuth } from "../utils/auth.js";
 import { validate, interestSchema } from '../utils/validators.js';
 import { publicUser } from "../utils/privacy.js"; // 🛡️ Added for data masking
+import { getEffectivePermissions, perm as planPerm, isExplicit } from "../utils/plan.js"; // 🧩 admin-plan permissions
 
 const router = express.Router();
 
@@ -244,6 +245,19 @@ router.post("/send", requireAuth, validate(interestSchema), async (req, res) => 
       return res.status(403).json({ error: "You cannot send an interest to this user.", code: "BLOCKED" });
     }
 
+    // 🧩 interest_to_anyone (admin plan): when the admin has set it to OFF, only the sender's own community.
+    // Enforced only if the admin really defined the key (so nothing changes silently).
+    const senderInfo = await getEffectivePermissions(sender_id);
+    if (isExplicit(senderInfo, "interest_to_anyone") && !planPerm(senderInfo.perms.interest_to_anyone)) {
+      const { data: comm } = await supabase.from("users").select("id, community").in("id", [sender_id, receiver_id]);
+      const norm = (v) => String(v || "").trim().toLowerCase();
+      const sc = norm(comm?.find((r) => r.id === sender_id)?.community);
+      const rc = norm(comm?.find((r) => r.id === receiver_id)?.community);
+      if (sc && rc && sc !== rc) {
+        return res.status(403).json({ error: "Your plan lets you send interests only within your own community. Upgrade to contact other communities.", code: "COMMUNITY_RESTRICTED", requiresUpgrade: true });
+      }
+    }
+
     // 🛡️ Daily limit from the ADMIN plan permission (daily_interests). Negative number = unlimited.
     const dailyLimit = await getDailyInterestLimit(sender_id);
     if (dailyLimit >= 0) {
@@ -343,3 +357,4 @@ router.get("/shortlisted/:userId", requireAuth, async (req, res) => {
 });
 
 export default router;
+        
