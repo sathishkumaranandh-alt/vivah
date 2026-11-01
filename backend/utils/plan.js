@@ -88,6 +88,12 @@ export async function getEffectivePermissions(userId) {
       const info = { planPerms, custom };
       ["contact_access", "can_view_paid_profiles"].forEach((k) => { if (!isExplicit(info, k)) perms[k] = true; });
     }
+    // remember which keys the admin explicitly defined (plan or per-user) - see planLocks()
+    const explicitKeys = new Set([
+      ...Object.keys(planPerms || {}),
+      ...Object.keys(custom || {}).filter((k) => custom[k] === true || typeof custom[k] === "number"),
+    ]);
+    Object.defineProperty(perms, "__explicit", { value: explicitKeys, enumerable: false });
     return { plan, isPaid, sub, perms, planPerms, custom };
   } catch {
     return empty;
@@ -102,5 +108,14 @@ export async function isPaidUser(userId) {
 export function isExplicit(info, key) {
   return Object.prototype.hasOwnProperty.call(info.planPerms || {}, key) ||
          Object.prototype.hasOwnProperty.call(info.custom || {}, key);
-             }
-  
+}
+
+// 🧩 Does the viewer's PLAN hide this owner's data?
+//  - owner is paid  : locked when the viewer's plan lacks the permission (as before)
+//  - owner is free  : locked ONLY when the admin explicitly set that permission on the viewer's
+//                     plan, so admin changes to the Free plan also apply free -> free.
+export function planLocks(ownerIsPaid, perms, key) {
+  if (perm((perms || {})[key])) return false;
+  return !!ownerIsPaid || !!(perms && perms.__explicit && perms.__explicit.has(key));
+      }
+      
