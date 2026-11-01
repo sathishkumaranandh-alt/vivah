@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { requireAuth, requireAdmin } from '../utils/auth.js'; // 🛡️ Added requireAuth
 
 dotenv.config();
-import { getEffectivePermissions } from '../utils/plan.js'; // 🧩 same function the backend enforces with
+import { getEffectivePermissions, planFeatureList } from '../utils/plan.js'; // 🧩 same function the backend enforces with
 const router = express.Router();
 
 const supabaseAdmin = createClient(
@@ -83,7 +83,7 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
         name,
         price: parseInt(price, 10) || 0,
         duration_days: parseInt(duration_days, 10) || 30,
-        features: features || [],
+        features: permissions ? planFeatureList(permissions) : (features || []),
         permissions: permissions || {},
         display_order: parseInt(display_order, 10) || 0,
         is_active: true,
@@ -111,6 +111,7 @@ router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
 
   if (updates.permissions && typeof updates.permissions === 'object') {
     updates.permissions = { ...updates.permissions };
+    updates.features = planFeatureList(updates.permissions); // 🧩 keep the stored feature list in sync
   }
 
   if (updates.is_active !== undefined) {
@@ -160,4 +161,4 @@ router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
 });
 
 export default router;
-    
+           
