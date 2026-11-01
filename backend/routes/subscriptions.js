@@ -1,6 +1,7 @@
 import express from "express";
 import supabase from "../supabaseClient.js";
 import { requireAdmin, requireAuth } from "../utils/auth.js"; // 🛡️ Added requireAuth
+import { planFeatureList, getPlanFeatures } from "../utils/plan.js"; // 🧩 live features from admin plan
 
 const router = express.Router();
 
@@ -102,7 +103,10 @@ router.get("/my-subscription", requireAuth, async (req, res) => {
       subscription = { ...subscription, status: "expired" };
     }
 
-    res.json({ subscription });
+    // 🧩 live feature list of the user's CURRENT plan (admin edits show up immediately)
+    let features = [];
+    try { features = await getPlanFeatures(subscription.plan); } catch { /* keep empty */ }
+    res.json({ subscription: { ...subscription, features } });
   } catch (err) {
     console.error("My subscription error:", err);
     res.status(500).json({ error: err.message });
@@ -453,7 +457,7 @@ router.get("/plans", async (req, res) => {
         p.duration_days === 9999
           ? "Lifetime"
           : `${p.duration_days || 30} days`,
-      features: p.features || [],
+      features: (() => { const f = planFeatureList(p.permissions); return f.length ? f : (p.features || []); })(), // 🧩 always matches admin permissions
       popular: p.name === "Gold" || p.is_popular === true,
       permissions: p.permissions || {},
       display_order: p.display_order || 0,
@@ -512,3 +516,4 @@ router.get("/plans", async (req, res) => {
 });
 
 export default router;
+        
