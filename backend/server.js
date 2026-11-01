@@ -9,6 +9,7 @@ import paymentRoutes from './routes/payments.js';
 // Route Imports
 import authRoutes from './routes/auth.js';
 import cronRoutes from './routes/cron.js';
+import { requireAdmin } from './utils/auth.js';
 import profileRoutes from './routes/profile.js';
 import messageRoutes from './routes/messages.js';
 import subscriptionRoutes from './routes/subscriptions.js';
@@ -212,6 +213,12 @@ app.get('/', (req, res) => {
   });
 });
 
+// 🔭 Admin-only: send a harmless test error to Sentry (button in Admin → Settings)
+app.post('/admin/test-sentry', requireAdmin, (req, res) => {
+  if (Sentry) Sentry.captureException(new Error('Sentry backend test (safe to ignore)'));
+  res.json({ sent: !!Sentry });
+});
+
 // ============================================
 // Error Handler
 // ============================================
@@ -255,4 +262,3 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-        
