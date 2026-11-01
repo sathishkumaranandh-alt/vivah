@@ -4,9 +4,9 @@
 // Permissions come from the ADMIN-configured plan (membership_plans.permissions)
 // + per-user overrides (users.custom_permissions). Nothing is hard-coded to
 // plan names like "Gold"/"Platinum" - if the admin changes the Free plan to
-// 7 photos, or creates a new "Silver" plan, it is enforced everywhere.
+// 7 photos, or creates a new "Diamond" plan, it is enforced everywhere.
 //
-// RULE: owner PRIVACY is always checked first (photo / contact / profile
+// RULE: the owner's PRIVACY lock is always checked first (photo / contact /
 // visibility / blocks). Plan permissions only apply AFTER privacy allows it.
 // =====================================================================
 import supabaseAdmin from "../supabaseClient.js";
@@ -51,6 +51,8 @@ export async function getActiveSubscription(userId) {
   } catch { return null; }
 }
 
+// NOTE: never .single() here - it throws on duplicates / zero rows and the
+// caller would silently fall back to defaults (= admin changes ignored).
 async function getPlanRow(planName) {
   if (!planName) return null;
   try {
@@ -58,6 +60,7 @@ async function getPlanRow(planName) {
       .from("membership_plans")
       .select("permissions, name, price")
       .ilike("name", escapeIlike(String(planName).trim()))
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     return data || null;
@@ -66,9 +69,8 @@ async function getPlanRow(planName) {
 
 // Paid = has an active, non-expired subscription whose plan is not "free".
 export async function getEffectivePermissions(userId) {
-  if (!userId) {
-    return { plan: "Free", isPaid: false, perms: { ...FALLBACK_FREE_PERMS }, planPerms: {}, custom: {} };
-  }
+  const empty = { plan: "Free", isPaid: false, sub: null, perms: { ...FALLBACK_FREE_PERMS }, planPerms: {}, custom: {} };
+  if (!userId) return empty;
   try {
     const [{ data: u }, sub] = await Promise.all([
       supabaseAdmin.from("users").select("custom_permissions").eq("id", userId).maybeSingle(),
@@ -79,9 +81,16 @@ export async function getEffectivePermissions(userId) {
     const row = await getPlanRow(plan);
     const planPerms = row?.permissions || {};
     const custom = u?.custom_permissions || {};
-    return { plan, isPaid, perms: mergePermissions(planPerms, custom), planPerms, custom };
+    const perms = mergePermissions(planPerms, custom);
+    // Paid plans created before these keys existed keep working: if the admin never
+    // defined them, a paid plan implies them. Once the admin sets them, THEY decide.
+    if (isPaid) {
+      const info = { planPerms, custom };
+      ["contact_access", "can_view_paid_profiles"].forEach((k) => { if (!isExplicit(info, k)) perms[k] = true; });
+    }
+    return { plan, isPaid, sub, perms, planPerms, custom };
   } catch {
-    return { plan: "Free", isPaid: false, perms: { ...FALLBACK_FREE_PERMS }, planPerms: {}, custom: {} };
+    return empty;
   }
 }
 
@@ -93,4 +102,5 @@ export async function isPaidUser(userId) {
 export function isExplicit(info, key) {
   return Object.prototype.hasOwnProperty.call(info.planPerms || {}, key) ||
          Object.prototype.hasOwnProperty.call(info.custom || {}, key);
-      }
+             }
+  
