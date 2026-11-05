@@ -37,6 +37,18 @@ const app = express();
 // Trust Render's proxy
 app.set('trust proxy', 1);
 
+// 🛡️ Security headers (same protection helmet gives an API, without a new package)
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader('Cache-Control', 'no-store'); // personal data must never be cached by browsers/proxies
+  next();
+});
+
 // ============================================
 // 🛡️ 1. SECURITY HEADERS (no extra package needed)
 // ============================================
@@ -260,4 +272,3 @@ const shutdown = (signal) => {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-          
