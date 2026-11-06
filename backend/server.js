@@ -183,6 +183,16 @@ app.use(generalLimiter);
 // 5. Routes
 // ============================================
 app.use('/auth', authRoutes);
+// 🛡️ Heavy / destructive account actions: only a few per hour (stops a stolen login from downloading or wiping everything)
+const accountDataLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many attempts. Please try again after an hour.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.get('/profile/export', accountDataLimiter);
+app.delete('/profile/me', accountDataLimiter);
 app.use('/profile', profileRoutes);
 app.use('/messages', messageRoutes);
 app.use('/subscriptions', subscriptionRoutes);
@@ -271,4 +281,4 @@ const shutdown = (signal) => {
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
+                
