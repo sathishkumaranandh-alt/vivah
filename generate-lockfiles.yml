@@ -1,0 +1,34 @@
+name: Generate lockfiles
+
+# Manual run only: GitHub app -> Actions -> "Generate lockfiles" -> Run workflow.
+# Creates package-lock.json next to every package.json that doesn't have one yet,
+# so Vercel / Render install the exact same package versions every time.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Create missing lockfiles
+        run: |
+          for f in $(find . -name package.json -not -path "*/node_modules/*"); do
+            d=$(dirname "$f")
+            if [ ! -f "$d/package-lock.json" ]; then
+              echo "Creating lockfile in $d"
+              (cd "$d" && npm install --package-lock-only --ignore-scripts)
+            fi
+          done
+      - name: Commit lockfiles
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A '*package-lock.json'
+          git diff --cached --quiet && echo "Nothing to commit" || (git commit -m "chore: add package-lock.json" && git push)
