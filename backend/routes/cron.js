@@ -4,13 +4,14 @@
 //   GET/POST /cron/daily-matches      → "N new matches" digest (once per user per day)
 //   GET/POST /cron/unread-reminders   → unread chat reminder (once per user per day)
 //   GET/POST /cron/admin-summary      → daily admin summary
+//   GET/POST /cron/expiry-alerts      → plan / boost expiry bell alerts (also runs inside daily-matches)
 //   GET/POST /cron/ping               → keep-alive only
 import express from 'express';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { sendTelegram } from '../utils/telegram.js';
-import { escapeHtml, sleep, logOnce, notifyAdmins } from '../utils/notify.js';
+import { escapeHtml, sleep, logOnce, notifyAdmins, inAppNotify } from '../utils/notify.js';
 
 dotenv.config();
 const router = express.Router();
@@ -149,8 +150,64 @@ async function adminSummary() {
   return { newUsers, newSubs, newReports, pendingReports };
 }
 
+// ---------- JOB 4: plan / boost expiry alerts (in-app bell) ----------
+// Run once a day. Each user gets at most one alert per kind per day (logOnce).
+async function expiryAlerts() {
+  const now = Date.now();
+  const iso = (ms) => new Date(ms).toISOString();
+  const out = { planSoon: 0, planEnded: 0, boostEnded: 0 };
+
+  // Plans ending in 2–3 days
+  const { data: soon } = await supabaseAdmin
+    .from('subscriptions').select('user_id, plan, expires_at')
+    .eq('status', 'active').gte('expires_at', iso(now + 2 * DAY_MS)).lt('expires_at', iso(now + 3 * DAY_MS)).limit(MAX_USERS_PER_RUN);
+  for (const s of soon || []) {
+    if (!(await logOnce(s.user_id, 'plan_expiring'))) continue;
+    await inAppNotify(s.user_id, {
+      type: 'plan_expiring', title: 'Your plan ends soon ⏳',
+      body: `Your ${s.plan} plan ends in 3 days. Renew now so you do not lose your premium features.`, link: '/subscription',
+    });
+    out.planSoon++;
+  }
+
+  // Plans that ended in the last 24 hours
+  const { data: ended } = await supabaseAdmin
+    .from('subscriptions').select('user_id, plan')
+    .eq('status', 'active').gte('expires_at', iso(now - DAY_MS)).lt('expires_at', iso(now)).limit(MAX_USERS_PER_RUN);
+  for (const s of ended || []) {
+    if (!(await logOnce(s.user_id, 'plan_expired'))) continue;
+    await inAppNotify(s.user_id, {
+      type: 'plan_expired', title: 'Your plan has ended',
+      body: `Your ${s.plan} plan has ended. Renew to continue chatting and viewing contacts.`, link: '/subscription',
+    });
+    out.planEnded++;
+  }
+
+  // Boosts that ended in the last 24 hours
+  const { data: boosts } = await supabaseAdmin
+    .from('users').select('id')
+    .gte('boost_expires_at', iso(now - DAY_MS)).lt('boost_expires_at', iso(now)).limit(MAX_USERS_PER_RUN);
+  for (const u of boosts || []) {
+    if (!(await logOnce(u.id, 'boost_ended'))) continue;
+    await inAppNotify(u.id, {
+      type: 'boost_ended', title: 'Your boost has ended',
+      body: 'Your profile boost is over. Boost again to appear at the top of search.', link: '/boost',
+    });
+    out.boostEnded++;
+  }
+  return out;
+}
+
+// Daily matches job also sends the expiry alerts (so no extra cron setup is needed)
+async function dailyMatchesAndAlerts() {
+  const matches = await dailyMatches().catch((e) => ({ error: e.message }));
+  const alerts = await expiryAlerts().catch((e) => ({ error: e.message }));
+  return { ...matches, alerts };
+}
+
 const JOBS = {
-  'daily-matches': dailyMatches,
+  'expiry-alerts': expiryAlerts,
+  'daily-matches': dailyMatchesAndAlerts,
   'unread-reminders': unreadReminders,
   'admin-summary': adminSummary,
   ping: async () => ({ ok: true }),
@@ -177,3 +234,4 @@ router.get('/:job', handle);
 router.post('/:job', handle);
 
 export default router;
+    
