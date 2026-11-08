@@ -1,0 +1,77 @@
+# Daily encrypted backup of the Supabase database (tables + users/auth).
+# Runs every day ~2:00 AM IST and can also be started by hand (Actions -> Database Backup -> Run workflow).
+# Files appear under the run as an "artifact" and are kept for 30 days.
+#
+# Needs these 2 GitHub Secrets (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_DB_URL     = Supabase -> Connect -> "Session pooler" connection string (IPv4), with your DB password filled in
+#   BACKUP_PASSPHRASE   = any long secret text you choose (keep it safe — without it the backup cannot be opened)
+name: Database Backup
+
+on:
+  schedule:
+    - cron: "30 20 * * *"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo install -d /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+
+      - name: Dump database
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -e
+          STAMP=$(date -u +%Y-%m-%d_%H%M)
+          /usr/lib/postgresql/17/bin/pg_dump "$DB_URL" \
+            --format=custom --no-owner --no-privileges \
+            --schema=public --schema=auth \
+            --file="vivaha_${STAMP}.dump"
+          ls -lh vivaha_*.dump
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+
+      - name: Encrypt (personal data must not stay readable)
+        env:
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -e
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PASS" \
+              --symmetric --cipher-algo AES256 \
+              -o "vivaha_${STAMP}.dump.gpg" "vivaha_${STAMP}.dump"
+          rm -f vivaha_*.dump
+          ls -lh
+
+      - name: Save backup (kept 30 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vivaha-db-${{ env.STAMP }}
+          path: vivaha_*.dump.gpg
+          retention-days: 30
+
+      - name: Dump schema blueprint (no user data - safe to keep plain)
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -e
+          mkdir -p schema
+          # tables, columns, indexes, constraints, RLS policies, functions, triggers of the public schema
+          /usr/lib/postgresql/17/bin/pg_dump "$DB_URL" --schema-only --no-owner --no-privileges \
+            --schema=public --file=schema/schema_public.sql
+          # storage buckets (photos etc.) + storage policies
+          psql "$DB_URL" -At -c "select 'bucket: ' || id || ' | public=' || public || ' | size_limit=' || coalesce(file_size_limit::text,'-') from storage.buckets order by id" > schema/storage_buckets.txt
+          psql "$DB_URL" -At -c "select 'create policy \"' || policyname || '\" on storage.objects for ' || cmd || ' to ' || array_to_string(roles, ',') || ' using (' || coalesce(qual,'true') || ')' || coalesce(' with check (' || with_check || ')','') || ';' from pg_policies where schemaname='storage' and tablename='objects'" > schema/storage_policies.sql
+          ls -lh schema
+
+      - name: Save schema blueprint (kept 90 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vivaha-schema-${{ env.STAMP }}
+          path: schema/
+          retention-days: 90
