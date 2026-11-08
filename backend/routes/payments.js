@@ -4,6 +4,7 @@ import { Cashfree } from 'cashfree-pg';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js';
+import { inAppNotify } from '../utils/notify.js';
 
 dotenv.config();
 const router = express.Router();
@@ -224,6 +225,13 @@ router.post('/verify-payment', requireAuth, async (req, res) => {
       .eq('status', 'active')
       .neq('id', sub.id);
 
+    inAppNotify(userId, {
+      type: 'payment_success',
+      title: 'Payment successful ✅',
+      body: `Your ${planData.name} plan is active until ${expiresAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+      link: '/subscription',
+    });
+
     res.json({
       success: true,
       message: 'Payment verified & plan activated!',
@@ -341,6 +349,13 @@ router.post('/verify-boost-payment', requireAuth, async (req, res) => {
       .eq('id', userId);
     if (updateErr) throw updateErr;
 
+    inAppNotify(userId, {
+      type: 'boost_started',
+      title: 'Boost activated 🚀',
+      body: `Your profile is boosted for ${BOOST_DURATION_DAYS} days. More people will see it first!`,
+      link: '/boost',
+    });
+
     res.json({
       success: true,
       message: 'Boost activated for 7 days!',
@@ -426,6 +441,12 @@ router.post('/webhook', async (req, res) => {
       await supabaseAdmin.from('subscriptions')
         .update({ status: 'cancelled', updated_at: now.toISOString() })
         .eq('user_id', userId).eq('status', 'active').neq('id', sub.id);
+      inAppNotify(userId, {
+        type: 'payment_success',
+        title: 'Payment successful ✅',
+        body: `Your ${planData.name} plan is active until ${expiresAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+        link: '/subscription',
+      });
       return res.json({ received: true, activated: 'plan' });
     }
 
@@ -446,6 +467,12 @@ router.post('/webhook', async (req, res) => {
         console.warn('Webhook: boost history failed', logErr);
       }
       await supabaseAdmin.from('users').update({ boost_expires_at: newExpiry.toISOString() }).eq('id', userId);
+      inAppNotify(userId, {
+        type: 'boost_started',
+        title: 'Boost activated 🚀',
+        body: `Your profile is boosted for ${BOOST_DURATION_DAYS} days. More people will see it first!`,
+        link: '/boost',
+      });
       return res.json({ received: true, activated: 'boost' });
     }
 
@@ -458,3 +485,4 @@ router.post('/webhook', async (req, res) => {
 });
 
 export default router;
+     
