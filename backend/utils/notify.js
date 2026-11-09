@@ -31,13 +31,16 @@ export async function logOnce(userId, kind) {
 // Telegram alert to every admin who linked Telegram (best effort, never throws).
 export async function notifyAdmins(text) {
   try {
-    const { data: admins } = await supabaseAdmin
+    const { data: admins, error } = await supabaseAdmin
       .from('users')
       .select('telegram_chat_id')
       .eq('role', 'admin')
       .not('telegram_chat_id', 'is', null);
+    if (error) console.error('notifyAdmins query error:', error.message);
+    console.log(`notifyAdmins: ${(admins || []).length} admin(s) with Telegram linked`);
     for (const a of admins || []) {
-      await sendTelegram(a.telegram_chat_id, text, 1).catch(() => null);
+      const ok = await sendTelegram(a.telegram_chat_id, text, 2).catch(() => false);
+      console.log(`notifyAdmins: send ${ok ? 'OK' : 'FAILED'}`);
     }
   } catch (e) {
     console.error('notifyAdmins error:', e.message);
@@ -51,4 +54,5 @@ export async function inAppNotify(userId, { type, title, body, link }) {
   } catch (e) {
     console.error('inAppNotify error:', e.message);
   }
-}
+  }
+              
