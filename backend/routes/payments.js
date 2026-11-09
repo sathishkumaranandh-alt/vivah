@@ -4,7 +4,7 @@ import { Cashfree } from 'cashfree-pg';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { requireAuth } from '../utils/auth.js';
-import { inAppNotify } from '../utils/notify.js';
+import { inAppNotify, notifyAdmins, escapeHtml } from '../utils/notify.js';
 
 dotenv.config();
 const router = express.Router();
@@ -25,6 +25,14 @@ Cashfree.XEnvironment =
 // 🛡️ Boost price is decided by the SERVER (same value as routes/boost.js)
 const BOOST_PRICE = Number(process.env.BOOST_PRICE) || 199;
 const BOOST_DURATION_DAYS = 7;
+
+// 💳 Telegram alert to the admin when money comes in (best effort, never blocks the payment)
+async function alertAdminPayment(userId, what, amount) {
+  try {
+    const { data: u } = await supabaseAdmin.from('users').select('name, email').eq('id', userId).maybeSingle();
+    notifyAdmins(`💳 <b>New payment</b>\n${escapeHtml(what)} · ₹${escapeHtml(amount)}\n${escapeHtml(u?.name || '-')} · ${escapeHtml(u?.email || '-')}`);
+  } catch (e) { console.error('alertAdminPayment error:', e.message); }
+}
 const AMOUNT_TOLERANCE = 0.01;
 
 // 🛡️ Escape % _ \ so a plan name can never act as a wildcard in ilike
@@ -231,6 +239,7 @@ router.post('/verify-payment', requireAuth, async (req, res) => {
       body: `Your ${planData.name} plan is active until ${expiresAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
       link: '/subscription',
     });
+    alertAdminPayment(userId, `${planData.name} plan`, planData.price);
 
     res.json({
       success: true,
@@ -355,6 +364,7 @@ router.post('/verify-boost-payment', requireAuth, async (req, res) => {
       body: `Your profile is boosted for ${BOOST_DURATION_DAYS} days. More people will see it first!`,
       link: '/boost',
     });
+    alertAdminPayment(userId, 'Profile boost', order.order_amount);
 
     res.json({
       success: true,
@@ -447,6 +457,7 @@ router.post('/webhook', async (req, res) => {
         body: `Your ${planData.name} plan is active until ${expiresAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
         link: '/subscription',
       });
+      alertAdminPayment(userId, `${planData.name} plan`, planData.price);
       return res.json({ received: true, activated: 'plan' });
     }
 
@@ -473,6 +484,7 @@ router.post('/webhook', async (req, res) => {
         body: `Your profile is boosted for ${BOOST_DURATION_DAYS} days. More people will see it first!`,
         link: '/boost',
       });
+      alertAdminPayment(userId, 'Profile boost', order.order_amount);
       return res.json({ received: true, activated: 'boost' });
     }
 
@@ -485,4 +497,4 @@ router.post('/webhook', async (req, res) => {
 });
 
 export default router;
-     
+    
