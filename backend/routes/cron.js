@@ -155,7 +155,7 @@ async function adminSummary() {
 async function expiryAlerts() {
   const now = Date.now();
   const iso = (ms) => new Date(ms).toISOString();
-  const out = { planSoon: 0, planEnded: 0, boostEnded: 0 };
+  const out = { planSoon: 0, planEnded: 0, boostEnded: 0, photoNudge: 0 };
 
   // Plans ending in 2–3 days
   const { data: soon } = await supabaseAdmin
@@ -194,6 +194,25 @@ async function expiryAlerts() {
       body: 'Your profile boost is over. Boost again to appear at the top of search.', link: '/boost',
     });
     out.boostEnded++;
+  }
+  // Members who joined 2–3 days ago and still have no photo -> one friendly nudge
+  const { data: newbies } = await supabaseAdmin
+    .from('users').select('id, photo_url')
+    .eq('role', 'user').eq('is_suspended', false).is('photo_url', null)
+    .gte('created_at', iso(now - 3 * DAY_MS)).lt('created_at', iso(now - 2 * DAY_MS)).limit(MAX_USERS_PER_RUN);
+  if ((newbies || []).length) {
+    const ids = newbies.map((u) => u.id);
+    const { data: withPhotos } = await supabaseAdmin.from('user_photos').select('user_id').in('user_id', ids);
+    const has = new Set((withPhotos || []).map((p) => p.user_id));
+    for (const u of newbies) {
+      if (has.has(u.id)) continue;
+      if (!(await logOnce(u.id, 'photo_nudge'))) continue;
+      await inAppNotify(u.id, {
+        type: 'photo_nudge', title: 'Add a photo 📸',
+        body: 'Profiles with a photo get many more interests. Add your photo now to start getting matches.', link: '/profile',
+      });
+      out.photoNudge++;
+    }
   }
   return out;
 }
@@ -234,4 +253,4 @@ router.get('/:job', handle);
 router.post('/:job', handle);
 
 export default router;
-    
+  
