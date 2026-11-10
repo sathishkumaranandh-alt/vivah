@@ -47,7 +47,8 @@ export const sendTelegram = async (chatId, text, retries = 3) => {
       if (error.name === 'AbortError') {
         console.error(`⏳ Telegram Timeout (Attempt ${attempt}/${retries}). Retrying...`);
       } else {
-        console.error(`❌ Telegram Fetch Error (Attempt ${attempt}):`, error.message);
+        const c = error.cause;
+        console.error(`❌ Telegram Fetch Error (Attempt ${attempt}):`, error.message, c ? `| cause: ${c.code || ''} ${c.message || c}` : '');
       }
 
       // Retry-ku munnadi 2 seconds wait panrom
@@ -61,3 +62,4 @@ export const sendTelegram = async (chatId, text, retries = 3) => {
   }
   return false;
 };
+            
