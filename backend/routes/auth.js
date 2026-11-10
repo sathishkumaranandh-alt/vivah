@@ -1,3 +1,4 @@
+import { registrationAllowed } from '../utils/maintenance.js';
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -30,6 +31,11 @@ const escapeHtml = (str) => {
 router.post('/signup', async (req, res) => {
   const data = req.body;
 
+  // 🚪 Admin switch: Allow New Registrations OFF → refuse here too (not only hide the form)
+  if (!(await registrationAllowed())) {
+    return res.status(403).json({ error: 'New registrations are temporarily closed. Please try again later.' });
+  }
+
   // 🤖 Bot protection (active only when TURNSTILE_SECRET_KEY is set in env)
   if (!(await verifyTurnstile(data.captchaToken, req.ip))) {
     return res.status(400).json({ error: "Security check failed. Please refresh and try again." });
@@ -57,7 +63,8 @@ router.post('/signup', async (req, res) => {
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: data.email.trim(),
       password: data.password,
-      email_confirm: true,
+      // Email verification is OFF until REQUIRE_EMAIL_VERIFICATION=true is set in env
+      email_confirm: process.env.REQUIRE_EMAIL_VERIFICATION !== 'true',
       user_metadata: { community: data.community }
     });
 
@@ -202,7 +209,7 @@ A new profile matching your preferences just registered.
     }
     console.log("--- END TELEGRAM MATCH ---");
 
-    res.json({ message: "Registration successful", userId });
+    res.json({ message: "Registration successful", userId, needsVerification: process.env.REQUIRE_EMAIL_VERIFICATION === 'true' });
   } catch (err) {
     console.error("Signup error:", err);
     
@@ -216,4 +223,3 @@ A new profile matching your preferences just registered.
 });
 
 export default router;
-  
