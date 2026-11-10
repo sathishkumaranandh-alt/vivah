@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import paymentRoutes from './routes/payments.js';
+import { maintenanceGate } from './utils/maintenance.js';
 
 
 // Route Imports
@@ -178,6 +179,7 @@ app.use('/success-stories/submit', actionLimiter);
 
 app.use('/auth', authLimiter);
 app.use(generalLimiter); 
+app.use(maintenanceGate); // 🛠️ Admin → Settings → Maintenance Mode (admins still get through)
 
 // ============================================
 // 5. Routes
@@ -281,4 +283,5 @@ const shutdown = (signal) => {
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-                
+
+        
