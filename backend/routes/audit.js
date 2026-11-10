@@ -105,7 +105,7 @@ router.get("/settings", async (req, res) => {
     // 🛡️ Public endpoint: never expose secret-looking keys
     const SECRET_KEY = /secret|token|password|passwd|api[_-]?key|private|webhook|service|salt|credential/i;
     // 🛡️ Whitelist: only keys the website UI actually uses are public (anything else stays admin-only)
-    const PUBLIC_KEY = /^(home_|homepage_|card_|global_|adv_|search_|privacy_|contact_|site_|support_|grievance_|mobile_|plan_|maintenance_|allow_|footer_|nav_|brand_|social_)/i;
+    const PUBLIC_KEY = /^(page_|home_|homepage_|card_|global_|adv_|search_|privacy_|contact_|site_|support_|grievance_|mobile_|plan_|maintenance_|allow_|footer_|nav_|brand_|social_)/i;
     (data || []).forEach((s) => {
       if (PUBLIC_KEY.test(s.key) && !SECRET_KEY.test(s.key)) settings[s.key] = s.value;
     });
@@ -146,4 +146,4 @@ router.put("/settings", requireAdmin, async (req, res) => {
 });
 
 export default router;
-        
+                         
