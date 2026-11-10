@@ -38,8 +38,10 @@ export async function notifyAdmins(text) {
       .not('telegram_chat_id', 'is', null);
     if (error) console.error('notifyAdmins query error:', error.message);
     console.log(`notifyAdmins: ${(admins || []).length} admin(s) with Telegram linked`);
-    for (const a of admins || []) {
-      const ok = await sendTelegram(a.telegram_chat_id, text, 2).catch(() => false);
+    // Two admin accounts may share one Telegram chat -> send only once per chat
+    const chatIds = [...new Set((admins || []).map((a) => a.telegram_chat_id))];
+    for (const chatId of chatIds) {
+      const ok = await sendTelegram(chatId, text, 2).catch(() => false);
       console.log(`notifyAdmins: send ${ok ? 'OK' : 'FAILED'}`);
     }
   } catch (e) {
@@ -54,5 +56,5 @@ export async function inAppNotify(userId, { type, title, body, link }) {
   } catch (e) {
     console.error('inAppNotify error:', e.message);
   }
-  }
-              
+}
+  
