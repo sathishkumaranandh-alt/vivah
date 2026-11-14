@@ -1,3 +1,4 @@
+import { filterByProfileVisibility } from '../utils/visibility.js';
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -115,7 +116,7 @@ router.get('/advanced-search', requireAuth, async (req, res) => {
     const ageMin = age_min ? parseInt(age_min) : null;
     const ageMax = age_max ? parseInt(age_max) : null;
 
-    const enriched = (data || []).map((u) => ({
+    const enriched = (await filterByProfileVisibility(supabaseAdmin, viewerId, data || [], !!viewerInfo.isPaid)).map((u) => ({
       ...u,
       _finalAge: u.age && u.age > 0 ? u.age : computeAgeFromDob(u.dob),
     }));
@@ -227,7 +228,8 @@ router.get('/recommendations/:userId', requireAuth, async (req, res) => {
 
     const now = new Date();
 
-    const scored = (potential || [])
+    const visiblePotential = await filterByProfileVisibility(supabaseAdmin, userId, potential || [], !!(await getEffectivePermissions(userId)).isPaid);
+    const scored = visiblePotential
       .filter(u => !exclude.has(u.id))
       .map(u => {
         let score = 0;
@@ -310,7 +312,8 @@ router.get('/premium-matches/:userId', requireAuth, async (req, res) => {
     if (error) throw error;
 
     // 🛡️ FIX: Mask data
-    const safeMatches = (data || []).map(u => {
+    const visibleMatches = await filterByProfileVisibility(supabaseAdmin, userId, data || [], !!(await getEffectivePermissions(userId)).isPaid);
+    const safeMatches = visibleMatches.map(u => {
       const safeUser = publicUser(u, false);
       if (u.photo_privacy === 'private' || u.photo_privacy === 'matches') {
         safeUser.photo_url = null;
@@ -328,4 +331,4 @@ router.get('/premium-matches/:userId', requireAuth, async (req, res) => {
 
 export default router;
 
-      
+                               
